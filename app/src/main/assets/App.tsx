@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Menu, X, ArrowLeft, Home, Lightbulb, Search, Wrench, ChevronRight, Shield, MessageCircle, Star, LogOut, Calculator, StickyNote, Timer as TimerIcon, Play, Square as SquareIcon, RotateCcw, RefreshCcw, LayoutGrid, BookOpen, Save, Trash2, Plus, Sigma, Languages, Mail, AlertCircle, WifiOff, FileText, Lock, Eye, Info } from 'lucide-react';
+import { Menu, X, ArrowLeft, Home, Lightbulb, Search, Wrench, ChevronRight, Shield, MessageCircle, Star, LogOut, Calculator, StickyNote, Timer as TimerIcon, Play, Square as SquareIcon, RotateCcw, RefreshCcw, LayoutGrid, BookOpen, Save, Trash2, Plus, Sigma, Languages, Mail, AlertCircle, WifiOff, FileText, Lock, Eye, Info, Check, Download } from 'lucide-react';
 import { SUBJECTS_DATA } from './constants';
 import { ViewState, Subject, Chapter, GuideMode, ToolSubView, SavedNote } from './types';
 
@@ -11,11 +11,24 @@ declare global {
       triggerInterstitialAdWithAction?: (action: string) => void;
       openExternalUrl?: (url: string) => void;
       exitApp?: () => void;
+      downloadPdf?: (chapterId: string, downloadUrl: string, callbackJs: string) => void;
+      getPdfBase64?: (chapterId: string) => string | null;
+      isPdfDownloaded?: (chapterId: string) => boolean;
+      deletePdf?: (chapterId: string) => boolean;
+      getDownloadedChapters?: () => string;
+      onAppReady?: () => void;
     };
     showExitPopupFromNative?: () => void;
     onInterstitialDismissedFromNative?: (action: string) => void;
+    __onDownloadProgress?: (percent: number, loadedMb: string, totalMb: string) => void;
+    __onListDownloadComplete?: (result: string | null) => void;
   }
 }
+
+const toBengaliDigits = (val: string | number): string => {
+  const bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+  return String(val).replace(/\d/g, (d) => bnDigits[parseInt(d, 10)]);
+};
 
 const App: React.FC = () => {
   const [view, setView] = useState<ViewState>('subjects');
@@ -33,6 +46,28 @@ const App: React.FC = () => {
   const [showAdminPopup, setShowAdminPopup] = useState(false);
   const [showComingSoon, setShowComingSoon] = useState(false);
   const [showNoInternetModal, setShowNoInternetModal] = useState(false);
+
+  // --- Favorite Chapters ---
+  const [favoriteChapters, setFavoriteChapters] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('favorite_chapters_v1');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [chapterFilter, setChapterFilter] = useState<'all' | 'favorite'>('all');
+
+  // --- Downloaded Chapters & Progress State ---
+  const [downloadedChapters, setDownloadedChapters] = useState<Set<string>>(new Set());
+  interface DownloadProgressState {
+    chapterId: string;
+    chapterTitle: string;
+    percent: number;
+    loadedMb: string;
+    totalMb: string;
+  }
+  const [downloadingState, setDownloadingState] = useState<DownloadProgressState | null>(null);
 
   // --- Tool States ---
   const [calcDisplay, setCalcDisplay] = useState('0');
@@ -52,7 +87,7 @@ const App: React.FC = () => {
   const pendingActionRef = useRef<null | { key: string; run: () => void }>(null);
   const pendingActionTimerRef = useRef<number | null>(null);
 
-  const ADS_ENABLED = true;
+  const ADS_ENABLED = false;
 
   // --- Converter States ---
   const [converterType, setConverterType] = useState<'bmi' | 'length' | 'weight'>('bmi');
@@ -140,6 +175,126 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const toggleFavoriteChapter = (chapterId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setFavoriteChapters(prev => {
+      const next = prev.includes(chapterId) ? prev.filter(id => id !== chapterId) : [...prev, chapterId];
+      try {
+        localStorage.setItem('favorite_chapters_v1', JSON.stringify(next));
+      } catch (_) {}
+      return next;
+    });
+  };
+
+  const refreshDownloadedChapters = useCallback(async () => {
+    const downloadedSet = new Set<string>();
+
+    // 1. Check Android native cache
+    try {
+      if (window.Android?.getDownloadedChapters) {
+        const jsonStr = window.Android.getDownloadedChapters();
+        if (jsonStr) {
+          const arr: string[] = JSON.parse(jsonStr);
+          arr.forEach(id => downloadedSet.add(id));
+        }
+      }
+    } catch (_) {}
+
+    // 2. Check IndexedDB
+    try {
+      const dbReq = indexedDB.open('Class7PdfCache', 1);
+      dbReq.onsuccess = () => {
+        const db = dbReq.result;
+        if (db.objectStoreNames.contains('pdfs')) {
+          const tx = db.transaction('pdfs', 'readonly');
+          const store = tx.objectStore('pdfs');
+          const getAllKeysReq = store.getAllKeys();
+          getAllKeysReq.onsuccess = () => {
+            if (getAllKeysReq.result) {
+              (getAllKeysReq.result as string[]).forEach(k => downloadedSet.add(k));
+              setDownloadedChapters(new Set(downloadedSet));
+            }
+          };
+        }
+      };
+    } catch (_) {}
+
+    // 3. Check localStorage cache registry
+    try {
+      const localRegistry = localStorage.getItem('downloaded_chapter_ids');
+      if (localRegistry) {
+        const ids: string[] = JSON.parse(localRegistry);
+        ids.forEach(id => downloadedSet.add(id));
+      }
+    } catch (_) {}
+
+    setDownloadedChapters(new Set(downloadedSet));
+  }, []);
+
+  useEffect(() => {
+    refreshDownloadedChapters();
+
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data?.type === 'PDF_DOWNLOAD_COMPLETE' && e.data?.chapterId) {
+        setDownloadedChapters(prev => {
+          const next = new Set(prev);
+          next.add(e.data.chapterId);
+          try {
+            localStorage.setItem('downloaded_chapter_ids', JSON.stringify(Array.from(next)));
+          } catch (_) {}
+          return next;
+        });
+      }
+    };
+    window.addEventListener('message', handleMessage);
+
+    window.__onDownloadProgress = (percent: number, loadedMb: string, totalMb: string) => {
+      setDownloadingState(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          percent: Math.max(0, Math.min(100, Math.round(percent))),
+          loadedMb: loadedMb || prev.loadedMb,
+          totalMb: totalMb || prev.totalMb,
+        };
+      });
+    };
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      window.__onDownloadProgress = undefined;
+    };
+  }, [refreshDownloadedChapters]);
+
+  const handleDeleteDownload = (chapterId: string, chapterTitle: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm(`"${chapterTitle}" এর ডাউনলোড করা ফাইলটি কি মুছে ফেলতে চান?`)) return;
+
+    try {
+      window.Android?.deletePdf?.(chapterId);
+    } catch (_) {}
+
+    try {
+      const dbReq = indexedDB.open('Class7PdfCache', 1);
+      dbReq.onsuccess = () => {
+        const db = dbReq.result;
+        if (db.objectStoreNames.contains('pdfs')) {
+          const tx = db.transaction('pdfs', 'readwrite');
+          tx.objectStore('pdfs').delete(chapterId);
+        }
+      };
+    } catch (_) {}
+
+    setDownloadedChapters(prev => {
+      const next = new Set(prev);
+      next.delete(chapterId);
+      try {
+        localStorage.setItem('downloaded_chapter_ids', JSON.stringify(Array.from(next)));
+      } catch (_) {}
+      return next;
+    });
+  };
+
   useEffect(() => {
     window.onInterstitialDismissedFromNative = (action: string) => {
       const pending = pendingActionRef.current
@@ -201,8 +356,16 @@ const App: React.FC = () => {
       setShowExitPopup(true);
     };
 
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'CLOSE_PDF_VIEWER') {
+        setView('chapters');
+      }
+    };
+    window.addEventListener('message', handleMessage);
+
     return () => {
       window.showExitPopupFromNative = undefined;
+      window.removeEventListener('message', handleMessage);
     };
   }, []);
 
@@ -212,6 +375,8 @@ const App: React.FC = () => {
   };
 
   const handleSubjectClick = (subject: Subject) => {
+    refreshDownloadedChapters();
+    setChapterFilter('all');
     setTimeout(() => {
       setCurrentSubject(subject);
       setGuideMode('guide');
@@ -219,16 +384,7 @@ const App: React.FC = () => {
     }, 180);
   };
 
-  const handleChapterClick = (chapter: Chapter, subject: Subject) => {
-    if (isOffline) {
-      setShowNoInternetModal(true);
-      return;
-    }
-    if (!chapter.pdfUrl || chapter.pdfUrl === "") {
-      triggerComingSoon();
-      return;
-    }
-
+  const openChapterContent = (chapter: Chapter, subject: Subject) => {
     chapterClickCounter.current += 1;
     userActionCounterRef.current += 1;
     const openPdf = () => {
@@ -237,24 +393,148 @@ const App: React.FC = () => {
       setView('content');
       setIsSearchOpen(false);
       setSearchQuery('');
-    }
+    };
 
     if (!shouldShowInterstitialNow()) {
-      openPdf()
-      return
+      openPdf();
+      return;
     }
 
-    lastInterstitialActionRef.current = userActionCounterRef.current
-    lastInterstitialTsRef.current = Date.now()
-    const actionKey = `open_pdf_${subject.id}_${chapter.id}_${chapterClickCounter.current}`
-    runWithInterstitial(actionKey, openPdf)
+    lastInterstitialActionRef.current = userActionCounterRef.current;
+    lastInterstitialTsRef.current = Date.now();
+    const actionKey = `open_pdf_${subject.id}_${chapter.id}_${chapterClickCounter.current}`;
+    runWithInterstitial(actionKey, openPdf);
   };
 
-  const handleToolClick = (toolId: ToolSubView) => {
+  const startExternalDownload = (chapter: Chapter, subject: Subject) => {
     if (isOffline) {
       setShowNoInternetModal(true);
       return;
     }
+
+    setDownloadingState({
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      percent: 5,
+      loadedMb: '0.1',
+      totalMb: '',
+    });
+
+    const finishDownload = (success: boolean) => {
+      setDownloadingState(null);
+      if (success) {
+        setDownloadedChapters(prev => {
+          const next = new Set(prev);
+          next.add(chapter.id);
+          try {
+            const list = JSON.parse(localStorage.getItem('downloaded_chapter_ids') || '[]');
+            if (!list.includes(chapter.id)) {
+              list.push(chapter.id);
+              localStorage.setItem('downloaded_chapter_ids', JSON.stringify(list));
+            }
+          } catch (_) {}
+          return next;
+        });
+
+        // Fully downloaded, now open immediately from phone storage
+        openChapterContent(chapter, subject);
+      } else {
+        alert('অধ্যায় ডাউনলোড সম্পন্ন করা যায়নি। ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।');
+      }
+    };
+
+    if (window.Android?.downloadPdf) {
+      window.__onListDownloadComplete = (result: string | null) => {
+        if (result && typeof result === 'string' && result.length > 0) {
+          finishDownload(true);
+        } else {
+          finishDownload(false);
+        }
+      };
+
+      try {
+        window.Android.downloadPdf(chapter.id, chapter.pdfUrl, 'window.__onListDownloadComplete');
+      } catch (e) {
+        console.error('Android.downloadPdf error:', e);
+        fallbackBrowserDownload(chapter, finishDownload);
+      }
+      return;
+    }
+
+    fallbackBrowserDownload(chapter, finishDownload);
+  };
+
+  const fallbackBrowserDownload = (chapter: Chapter, onFinish: (success: boolean) => void) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', chapter.pdfUrl, true);
+    xhr.responseType = 'arraybuffer';
+
+    xhr.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        const loadedMb = (e.loaded / (1024 * 1024)).toFixed(1);
+        const totalMb = (e.total / (1024 * 1024)).toFixed(1);
+        setDownloadingState(prev => prev ? { ...prev, percent, loadedMb, totalMb } : null);
+      } else {
+        const loadedMb = (e.loaded / (1024 * 1024)).toFixed(1);
+        setDownloadingState(prev => prev ? { ...prev, percent: 50, loadedMb, totalMb: '' } : null);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status === 200 && xhr.response) {
+        try {
+          const dbReq = indexedDB.open('Class7PdfCache', 1);
+          dbReq.onupgradeneeded = (e: any) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('pdfs')) db.createObjectStore('pdfs');
+          };
+          dbReq.onsuccess = () => {
+            const db = dbReq.result;
+            const tx = db.transaction('pdfs', 'readwrite');
+            const store = tx.objectStore('pdfs');
+            store.put(xhr.response, chapter.id);
+            tx.oncomplete = () => onFinish(true);
+            tx.onerror = () => onFinish(false);
+          };
+          dbReq.onerror = () => onFinish(false);
+        } catch (_) {
+          onFinish(false);
+        }
+      } else {
+        onFinish(false);
+      }
+    };
+
+    xhr.onerror = () => onFinish(false);
+    xhr.send();
+  };
+
+  const handleChapterClick = (chapter: Chapter, subject: Subject) => {
+    if (!chapter.pdfUrl || chapter.pdfUrl === "") {
+      triggerComingSoon();
+      return;
+    }
+
+    const isDownloaded = downloadedChapters.has(chapter.id) ||
+      Boolean(window.Android?.isPdfDownloaded && window.Android.isPdfDownloaded(chapter.id));
+
+    if (isOffline && !isDownloaded) {
+      setShowNoInternetModal(true);
+      return;
+    }
+
+    // If already downloaded: NEVER re-download! Open directly from phone memory!
+    if (isDownloaded) {
+      openChapterContent(chapter, subject);
+      return;
+    }
+
+    // If not downloaded: download completely from the outside first, then open!
+    startExternalDownload(chapter, subject);
+  };
+
+  const handleToolClick = (toolId: ToolSubView) => {
     userActionCounterRef.current += 1;
     const openTool = () => {
       setActiveTool(toolId);
@@ -297,7 +577,7 @@ const App: React.FC = () => {
                             .replace(/cos\(([^)]+)\)/g, (_, a) => `Math.cos((${a})*Math.PI/180)`)
                             .replace(/tan\(([^)]+)\)/g, (_, a) => `Math.tan((${a})*Math.PI/180)`)
                             .replace(/sqrt/g, 'Math.sqrt').replace(/pi/g, 'Math.PI').replace(/\^/g, '**');
-        const res = eval(exp);
+        const res = Function(`"use strict"; return (${exp})`)();
         setCalcDisplay(Number.isFinite(res) ? Number(res.toFixed(4)).toString() : 'Error');
       } catch { setCalcDisplay('Error'); }
     } else setCalcDisplay(p => p === '0' || p === 'Error' ? val : p + val);
@@ -378,19 +658,63 @@ const App: React.FC = () => {
         {[...Array(5)].map((_, i) => (<div key={i} className="bird" style={{ top: `${10 + i * 20}%`, animationDuration: `${16 + Math.random() * 8}s`, animationDelay: `${i * 2}s` }} />))}
       </div>
 
-      <header className="fixed top-4 left-4 right-4 h-18 floating-header flex items-center justify-between px-6 py-2">
-        <div className="flex items-center gap-3">
+      <header className="fixed top-4 left-4 right-4 h-18 floating-header flex items-center justify-between px-4 sm:px-6 py-2">
+        <div className="flex items-center gap-3 shrink-0">
           {view === 'subjects' ? (
             <button onClick={toggleDrawer} className="h-10 w-10 flex flex-col justify-center gap-1.5 p-2 bg-white/10 rounded-lg transition-transform active:scale-90">
               <div className="w-7 h-0.5 bg-sky-100 rounded-full"></div><div className="w-5 h-0.5 bg-sky-100 rounded-full"></div>
             </button>
           ) : (<button onClick={handleBack} className="h-10 w-10 flex items-center justify-center text-white bg-white/10 rounded-lg transition-transform active:scale-90"><ArrowLeft size={24}/></button>)}
         </div>
-        <div className="text-center">
-          <h1 className="text-lg font-black text-white brand-font tracking-wide">জ্ঞান সহায়তা</h1>
-          <p className="text-[9px] font-bold text-sky-200 tracking-wider">সপ্তম শ্রেণী • বাংলা মাধ্যম</p>
+        <div className="text-center flex-1 min-w-0 px-2">
+          {view === 'chapters' && currentSubject ? (
+            <>
+              <h1 className="text-base font-black text-white brand-font tracking-wide truncate">{currentSubject.name}</h1>
+              <p className="text-[9px] font-bold text-sky-200 tracking-wider truncate">
+                {chapterFilter === 'favorite' ? '★ প্রিয় অধ্যায়সমূহ' : (guideMode === 'guide' ? 'মূল গাইড' : 'বিকল্প গাইড')} • সপ্তম শ্রেণী
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-lg font-black text-white brand-font tracking-wide">জ্ঞান সহায়তা</h1>
+              <p className="text-[9px] font-bold text-sky-200 tracking-wider">সপ্তম শ্রেণী • বাংলা মাধ্যম</p>
+            </>
+          )}
         </div>
-        <div className="h-12 w-12 bg-white/20 rounded-xl p-1 shadow-lg transition-transform active:scale-95"><img src={LOGO_GIF} className="w-full h-full object-contain" /></div>
+        <div className="shrink-0 flex items-center">
+          {view === 'chapters' && currentSubject ? (
+            (() => {
+              const allChs = guideMode === 'guide' ? currentSubject.chapters : (currentSubject.altChapters || []);
+              const favCount = allChs.filter(c => favoriteChapters.includes(c.id)).length;
+              const isFavActive = chapterFilter === 'favorite';
+              return (
+                <button
+                  type="button"
+                  onClick={() => setChapterFilter(prev => prev === 'favorite' ? 'all' : 'favorite')}
+                  className={`h-10 px-3 rounded-xl flex items-center justify-center gap-1.5 transition-all active:scale-90 shadow-md ${
+                    isFavActive
+                      ? 'bg-amber-400 text-amber-950 ring-2 ring-white/90 shadow-amber-500/40'
+                      : 'bg-white/20 hover:bg-white/30 text-white border border-white/25'
+                  }`}
+                  title={isFavActive ? "সকল অধ্যায় দেখুন" : "প্রিয় অধ্যায় দেখুন"}
+                >
+                  <Star
+                    size={16}
+                    className={isFavActive ? 'fill-amber-950 text-amber-950' : (favCount > 0 ? 'fill-amber-300 text-amber-300' : 'text-white')}
+                  />
+                  <span className="text-xs font-black brand-font leading-none">
+                    {isFavActive ? 'সব অধ্যায়' : 'প্রিয়'}
+                    {favCount > 0 && ` (${favCount})`}
+                  </span>
+                </button>
+              );
+            })()
+          ) : (
+            <div className="h-12 w-12 bg-white/20 rounded-xl p-1 shadow-lg transition-transform active:scale-95">
+              <img src={LOGO_GIF} className="w-full h-full object-contain" />
+            </div>
+          )}
+        </div>
       </header>
 
       <main className="pt-24 px-4 z-10 relative max-w-2xl mx-auto">
@@ -427,22 +751,205 @@ const App: React.FC = () => {
         )}
 
         {view === 'chapters' && currentSubject && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-5 duration-500">
-            <div className="flex bg-white/50 backdrop-blur-md p-1.5 rounded-2xl gap-1.5 mb-8 border border-white shadow-sm">
-              <button onClick={() => setGuideMode('guide')} className={`flex-1 py-3.5 rounded-xl font-black text-sm transition-all ${guideMode === 'guide' ? 'bg-sky-600 text-white shadow-lg' : 'text-blue-900/40'}`}>মূল গাইড</button>
-              <button onClick={() => setGuideMode('altGuide')} className={`flex-1 py-3.5 rounded-xl font-black text-sm transition-all ${guideMode === 'altGuide' ? 'bg-blue-600 text-white shadow-lg' : 'text-blue-900/40'}`}>বিকল্প গাইড</button>
+          <div className="space-y-3.5 animate-in fade-in slide-in-from-bottom-5 duration-500">
+            {/* Subject Header Card - Lower opacity bar */}
+            <div className="bg-white/20 backdrop-blur-md p-3.5 rounded-2xl border border-white/30 shadow-sm flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="h-11 w-11 rounded-2xl bg-white/30 backdrop-blur-sm flex items-center justify-center text-2xl shadow-inner shrink-0 border border-white/40">
+                  {currentSubject.icon}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-base font-black text-blue-950 brand-font leading-tight truncate">{currentSubject.name}</h2>
+                  <p className="text-[11px] font-bold text-blue-900/80 mt-0.5 flex items-center gap-1.5">
+                    <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+                    {(() => {
+                      const allChs = [...currentSubject.chapters, ...(currentSubject.altChapters || [])];
+                      const dCount = allChs.filter(c => downloadedChapters.has(c.id)).length;
+                      return `${dCount} / ${allChs.length} টি ডাউনলোডকৃত`;
+                    })()}
+                  </p>
+                </div>
+              </div>
             </div>
-            <div className="space-y-3.5 pb-10">
-              {(guideMode === 'guide' ? currentSubject.chapters : (currentSubject.altChapters || [])).map(c => (
-                <button key={c.id} onClick={() => handleChapterClick(c, currentSubject)} className="w-full bg-white/80 p-5 rounded-2xl flex items-center justify-between border border-sky-100 shadow-sm hover:bg-white active:scale-[0.98] transition-all">
-                  <div className="flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-xl bg-sky-100 flex items-center justify-center text-blue-700 font-black text-xs">{c.id.split('.')[1] || '•'}</div>
-                    <span className="text-blue-900 font-bold text-left text-sm">{c.title}</span>
-                  </div>
-                  <ChevronRight size={18} className="text-sky-400" />
+
+            {/* Guide Switch Tabs - Subtle translucent bar */}
+            <div className="flex bg-white/20 backdrop-blur-md p-1 rounded-2xl gap-1 border border-white/25 shadow-sm">
+              <button
+                onClick={() => setGuideMode('guide')}
+                className={`flex-1 py-2.5 rounded-xl font-black text-xs transition-all ${
+                  guideMode === 'guide' ? 'bg-sky-600 text-white shadow-md' : 'text-blue-900/60 hover:text-blue-900'
+                }`}
+              >
+                মূল গাইড
+              </button>
+              <button
+                onClick={() => setGuideMode('altGuide')}
+                className={`flex-1 py-2.5 rounded-xl font-black text-xs transition-all ${
+                  guideMode === 'altGuide' ? 'bg-blue-600 text-white shadow-md' : 'text-blue-900/60 hover:text-blue-900'
+                }`}
+              >
+                বিকল্প গাইড
+              </button>
+            </div>
+
+            {/* Active Favorite Filter Banner (if filter is active from header) */}
+            {chapterFilter === 'favorite' && (
+              <div className="bg-amber-400/25 backdrop-blur-md border border-amber-300/50 p-2.5 px-3.5 rounded-2xl flex items-center justify-between text-xs font-black text-blue-950 shadow-sm animate-in fade-in duration-300">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Star size={14} className="fill-amber-500 text-amber-500 shrink-0" />
+                  <span className="truncate">শুধু প্রিয় অধ্যায়সমূহ দেখাচ্ছে</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setChapterFilter('all')}
+                  className="text-[11px] font-black text-blue-950 bg-white/70 hover:bg-white px-2.5 py-1 rounded-lg border border-amber-300/60 shadow-xs shrink-0 ml-2"
+                >
+                  সব অধ্যায় দেখুন
                 </button>
-              ))}
-            </div>
+              </div>
+            )}
+
+            {/* Chapter Items List */}
+            {(() => {
+              const allChs = guideMode === 'guide' ? currentSubject.chapters : (currentSubject.altChapters || []);
+              const displayedChapters = chapterFilter === 'favorite'
+                ? allChs.filter(c => favoriteChapters.includes(c.id))
+                : allChs;
+
+              if (chapterFilter === 'favorite' && displayedChapters.length === 0) {
+                return (
+                  <div className="bg-white/30 backdrop-blur-md rounded-2xl p-7 text-center border border-white/40 shadow-sm space-y-2">
+                    <div className="h-12 w-12 rounded-full bg-amber-100 text-amber-500 flex items-center justify-center mx-auto shadow-sm">
+                      <Star size={24} className="fill-amber-400" />
+                    </div>
+                    <h3 className="text-sm font-black text-blue-950">কোনো প্রিয় অধ্যায় নেই</h3>
+                    <p className="text-xs text-blue-900/70 leading-relaxed">
+                      অধ্যায়ের ডান পাশের স্টার (★) বাটনে চাপ দিয়ে যেকোনো অধ্যায় প্রিয় তালিকায় রাখুন।
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setChapterFilter('all')}
+                      className="mt-2 px-4 py-2 bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md active:scale-95 transition-transform"
+                    >
+                      সকল অধ্যায় দেখুন
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-3 pb-10">
+                  {displayedChapters.map((c, idx) => {
+                    const isDownloaded = downloadedChapters.has(c.id) ||
+                      Boolean(window.Android?.isPdfDownloaded && window.Android.isPdfDownloaded(c.id));
+                    const isFav = favoriteChapters.includes(c.id);
+                    const isDownloadingThis = downloadingState?.chapterId === c.id;
+                    const chapterNumStr = toBengaliDigits(c.id.split('.')[1] || (idx + 1));
+
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => handleChapterClick(c, currentSubject)}
+                        className={`w-full p-3.5 sm:p-4 rounded-2xl flex items-center justify-between border shadow-sm transition-all cursor-pointer active:scale-[0.98] ${
+                          isFav ? 'ring-1 ring-amber-300' : ''
+                        } ${
+                          isDownloadingThis
+                            ? 'bg-sky-50 border-sky-300'
+                            : isDownloaded
+                              ? 'bg-emerald-50/90 border-emerald-300/80 hover:bg-emerald-50'
+                              : isFav
+                                ? 'bg-amber-50/70 border-amber-200 hover:bg-amber-50/90'
+                                : 'bg-white/90 border-sky-100/90 hover:bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                          <div className={`relative h-11 w-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 shadow-xs border transition-colors ${
+                            isDownloaded 
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300' 
+                              : isDownloadingThis
+                                ? 'bg-sky-200 text-sky-800 border-sky-300 animate-pulse'
+                                : isFav
+                                  ? 'bg-amber-100 text-amber-900 border-amber-200'
+                                  : 'bg-sky-100 text-blue-800 border-sky-200'
+                          }`}>
+                            {chapterNumStr}
+                            {isDownloaded && (
+                              <div className="absolute -top-1 -right-1 h-4 w-4 bg-emerald-600 rounded-full flex items-center justify-center text-white border-2 border-white shadow-xs">
+                                <Check size={10} strokeWidth={3.5} />
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-col min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-blue-950 font-bold text-left text-sm truncate">{c.title}</span>
+                              {isFav && (
+                                <span className="text-[9px] font-black text-amber-800 bg-amber-200/80 px-1.5 py-0.5 rounded-md flex items-center gap-0.5 shrink-0">
+                                  ★ প্রিয়
+                                </span>
+                              )}
+                            </div>
+                            {isDownloadingThis ? (
+                              <span className="flex items-center gap-1.5 text-[10px] font-bold text-sky-700 mt-0.5">
+                                <RefreshCcw size={11} className="animate-spin text-sky-600" />
+                                ডাউনলোড হচ্ছে {toBengaliDigits(downloadingState?.percent || 0)}%...
+                              </span>
+                            ) : isDownloaded ? (
+                              <span className="flex items-center gap-1.5 text-[10px] font-black text-emerald-700 mt-0.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
+                                সংরক্ষিত (মেমোরি) • অফলাইনে পড়া যাবে
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-semibold text-slate-400 mt-0.5 flex items-center gap-1">
+                                <Download size={11} />
+                                ক্লিক করে ডাউনলোড ও পড়ুন
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0 ml-2">
+                          {/* Favorite (Priyo) Button */}
+                          <button
+                            type="button"
+                            onClick={(e) => toggleFavoriteChapter(c.id, e)}
+                            title={isFav ? "প্রিয় তালিকা থেকে সরান" : "প্রিয় তালিকায় রাখুন"}
+                            className={`h-9 w-9 rounded-xl flex items-center justify-center active:scale-75 transition-all shadow-sm ${
+                              isFav
+                                ? 'bg-amber-100 text-amber-500 border border-amber-300'
+                                : 'bg-slate-50 hover:bg-amber-50 text-slate-300 hover:text-amber-400 border border-slate-200'
+                            }`}
+                          >
+                            <Star
+                              size={17}
+                              className={isFav ? "fill-amber-400 text-amber-500 drop-shadow-[0_0_4px_rgba(251,191,36,0.8)]" : ""}
+                            />
+                          </button>
+
+                          {isDownloadingThis ? (
+                            <div className="h-9 w-9 rounded-xl bg-sky-100 border border-sky-300 text-sky-600 flex items-center justify-center shadow-xs">
+                              <RefreshCcw size={16} className="animate-spin" />
+                            </div>
+                          ) : isDownloaded ? (
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteDownload(c.id, c.title, e)}
+                              title="ডাউনলোড মুছে ফেলুন"
+                              className="h-9 w-9 rounded-xl bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 flex items-center justify-center active:scale-90 transition-all shadow-sm"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          ) : (
+                            <div className="h-9 w-9 rounded-xl bg-sky-50 border border-sky-200 flex items-center justify-center text-sky-600 shadow-xs">
+                              <Download size={16} />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -618,26 +1125,9 @@ const App: React.FC = () => {
 
       {/* Edge-to-Edge PDF Viewer Outside Main Wrapper */}
       {view === 'content' && currentChapter && (
-        <div className="fixed inset-0 bg-white z-[9999] flex flex-col animate-in fade-in duration-300">
-          <div className="absolute top-10 left-4 right-4 flex items-center justify-between pointer-events-none z-[10000]">
-            <button 
-              onClick={() => setView('chapters')} 
-              className="p-3 bg-white/2 backdrop-blur-[1px] text-blue-900/40 rounded-full shadow-sm border border-white/5 active:scale-75 transition-all pointer-events-auto"
-              aria-label="Back"
-            >
-              <ArrowLeft size={24} strokeWidth={3} />
-            </button>
-            {guideMode !== 'altGuide' && (
-              <div className="bg-white/70 backdrop-blur-xl px-4 py-2 rounded-2xl shadow-xl border border-blue-50 flex items-center max-w-[70%]">
-                 <h2 className="text-blue-950 font-black text-[10px] uppercase tracking-tighter truncate">
-                   {currentChapter.title}
-                 </h2>
-              </div>
-            )}
-            <div className="w-10 invisible"></div>
-          </div>
+        <div className="fixed inset-0 bg-[#1a1e24] z-[9999] flex flex-col animate-in fade-in duration-300">
           <iframe 
-            src={currentChapter.pdfUrl} 
+            src={`./reader.html?id=${encodeURIComponent(currentChapter.id)}&title=${encodeURIComponent(currentChapter.title)}&url=${encodeURIComponent(currentChapter.pdfUrl)}`} 
             className="w-full h-full border-none m-0 p-0" 
             title={currentChapter.title}
             allow="fullscreen"
@@ -895,6 +1385,43 @@ const App: React.FC = () => {
             
             <button onClick={() => setShowPrivacyModal(false)} className="w-full bg-green-700 text-white py-4 rounded-[6px] font-black mt-8 shadow-xl text-xs active:scale-95 transition-all uppercase tracking-widest">
               Agree
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Download Progress Modal - Outside download before opening */}
+      {downloadingState && (
+        <div className="fixed inset-0 z-[16000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-5 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl border border-sky-100 flex flex-col items-center text-center space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="h-16 w-16 rounded-2xl bg-sky-100 text-sky-600 flex items-center justify-center shadow-inner">
+              <Download size={30} className="animate-bounce" />
+            </div>
+            <div className="w-full space-y-1">
+              <h3 className="text-base font-black text-blue-950">অধ্যায় ডাউনলোড হচ্ছে</h3>
+              <p className="text-xs font-bold text-sky-700 truncate px-2">{downloadingState.chapterTitle}</p>
+              <p className="text-[11px] font-medium text-slate-400">সম্পূর্ণ ডাউনলোড হওয়ার পর স্বয়ংক্রিয়ভাবে ওপেন হবে</p>
+            </div>
+
+            <div className="w-full space-y-2">
+              <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden p-0.5 border border-slate-200 shadow-inner">
+                <div 
+                  className="bg-gradient-to-r from-sky-500 to-blue-600 h-full rounded-full transition-all duration-300 shadow-sm"
+                  style={{ width: `${Math.max(5, downloadingState.percent)}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs font-black text-slate-600 px-1">
+                <span>{toBengaliDigits(downloadingState.percent)}%</span>
+                <span>{downloadingState.loadedMb ? `${downloadingState.loadedMb}MB ${downloadingState.totalMb ? '/ ' + downloadingState.totalMb + 'MB' : ''}` : 'প্রস্তুত হচ্ছে...'}</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setDownloadingState(null)}
+              className="w-full py-2.5 rounded-xl border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50 active:scale-95 transition-all"
+            >
+              বাতিল করুন
             </button>
           </div>
         </div>

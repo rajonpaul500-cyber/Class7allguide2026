@@ -1,12 +1,18 @@
 
 <!DOCTYPE html>
-<html lang="bn">
+<html lang="bn" style="background: linear-gradient(180deg, #f0f9ff 0%, #bae6fd 30%, #7dd3fc 60%, #0ea5e9 100%); min-height: 100%;">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>সপ্তম শ্রেণীর গাইড - ব্লু এডিশন</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Galada&family=Noto+Sans+Bengali:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        html, body {
+            background-color: #f0f9ff;
+        }
+    </style>
+    <script src="file:///android_asset/www/assets/tailwindcss.js"></script>
+    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Galada&family=Noto+Sans+Bengali:wght@300;400;500;600;700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Galada&family=Noto+Sans+Bengali:wght@300;400;500;600;700&display=swap"></noscript>
     <style>
         @font-face {
             font-family: 'Kalpurush';
@@ -138,8 +144,13 @@
             position: absolute;
             width: 40px;
             height: 40px;
-            background: url('file:///android_asset/Image/sticker/bird.gif') no-repeat center/contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: contain;
             animation: fly linear infinite;
+        }
+        body.loaded .bird {
+            background-image: url('file:///android_asset/Image/sticker/bird.gif');
         }
         
         @keyframes fly {
@@ -166,9 +177,16 @@
   }
 }
 </script>
-  <script type="module" crossorigin src="./assets/index-DJTPHTrK.js"></script>
+  <script type="module" crossorigin src="./assets/index-DQScFjZi.js"></script>
 </head>
 <body class="overflow-x-hidden">
     <div id="root"></div>
+    <script>
+        window.addEventListener('DOMContentLoaded', () => {
+            requestAnimationFrame(() => {
+                document.body.classList.add('loaded');
+            });
+        });
+    </script>
 </body>
 </html>

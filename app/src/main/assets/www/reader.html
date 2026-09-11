@@ -1,0 +1,1972 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=4.0, user-scalable=yes, viewport-fit=cover">
+    <title>AnyFlip PDF Reader</title>
+    <script src="./pdfjs/pdf.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background-color: #0f172a;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Kalpurush", sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        /* Top Bar - positioned safely below system status bar */
+        .top-bar {
+            height: calc(52px + env(safe-area-inset-top, 0px));
+            padding-top: env(safe-area-inset-top, 0px);
+            background: rgba(15, 23, 42, 0.96);
+            backdrop-filter: blur(16px);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-left: 12px;
+            padding-right: 12px;
+            z-index: 60;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            flex-shrink: 0;
+            transition: transform 0.3s ease;
+        }
+        .top-bar.hidden {
+            transform: translateY(-100%);
+        }
+        .top-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+        .back-btn {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #ffffff;
+            cursor: pointer;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.15s ease, transform 0.15s ease;
+        }
+        .back-btn:active {
+            background: rgba(255, 255, 255, 0.2);
+            transform: scale(0.92);
+        }
+        .chapter-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: #f8fafc;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 210px;
+            letter-spacing: 0.2px;
+        }
+
+        /* Top actions */
+        .top-right {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .icon-btn {
+            background: transparent;
+            border: none;
+            color: #cbd5e1;
+            padding: 7px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        .icon-btn:active {
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .icon-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .note-btn {
+            background: rgba(255, 255, 255, 0.09);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #f8fafc;
+            padding: 5px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .note-btn:active {
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        /* Horizontal AnyFlip 3D Stage with smooth touch gestures */
+        .flipbook-stage {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            perspective: 2400px;
+            background: radial-gradient(circle at center, #1e293b 0%, #090d16 100%);
+            touch-action: none;
+        }
+
+        /* Book Frame & Realistic Shadows */
+        .book-frame {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transform-style: preserve-3d;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7), 0 4px 14px rgba(0,0,0,0.45);
+            border-radius: 4px;
+            background: #ffffff;
+            transform-origin: center center;
+            will-change: transform;
+        }
+
+        /* Current Visible Page Sheet */
+        .page-sheet {
+            position: absolute;
+            inset: 0;
+            background: #ffffff;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: inset 20px 0 28px -16px rgba(0, 0, 0, 0.18);
+        }
+        .page-sheet canvas#mainCanvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: contain;
+        }
+
+        /* Transparent Highlighter Overlay Canvas */
+        .highlight-canvas {
+            position: absolute;
+            inset: 0;
+            width: 100% !important;
+            height: 100% !important;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .highlight-canvas.active-draw {
+            pointer-events: auto;
+            cursor: crosshair;
+        }
+
+        /* Spine realistic shadow on left edge */
+        .book-spine-effect {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 32px;
+            background: linear-gradient(to right, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.06) 40%, transparent 100%);
+            pointer-events: none;
+            z-index: 15;
+        }
+
+        /* 3D Flipping Leaf Sheet */
+        .flip-leaf {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            transform-origin: left center;
+            transform-style: preserve-3d;
+            z-index: 25;
+            display: none;
+            border-radius: 4px;
+        }
+        .flip-leaf.turning-forward {
+            display: block;
+            animation: flipForwardAnim 0.42s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+        }
+        .flip-leaf.turning-backward {
+            display: block;
+            animation: flipBackwardAnim 0.42s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+        }
+
+        @keyframes flipForwardAnim {
+            0% {
+                transform: rotateY(0deg);
+                box-shadow: 0 0 10px rgba(0,0,0,0.3);
+            }
+            50% {
+                transform: rotateY(-90deg) scale(1.02);
+                box-shadow: -15px 0 35px rgba(0,0,0,0.5);
+            }
+            100% {
+                transform: rotateY(-180deg);
+                box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            }
+        }
+
+        @keyframes flipBackwardAnim {
+            0% {
+                transform: rotateY(-180deg);
+                box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            }
+            50% {
+                transform: rotateY(-90deg) scale(1.02);
+                box-shadow: 15px 0 35px rgba(0,0,0,0.5);
+            }
+            100% {
+                transform: rotateY(0deg);
+                box-shadow: 0 0 10px rgba(0,0,0,0.3);
+            }
+        }
+
+        .flip-leaf-front, .flip-leaf-back {
+            position: absolute;
+            inset: 0;
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+            border-radius: 4px;
+            overflow: hidden;
+            background: #ffffff;
+        }
+        .flip-leaf-front canvas, .flip-leaf-back canvas {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: contain;
+        }
+        .flip-leaf-back {
+            transform: rotateY(180deg);
+            background: #fdfdfd;
+        }
+
+        /* Gradient fold shadow during flip */
+        .flip-shadow-overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 26;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        .flip-leaf.turning-forward .flip-shadow-overlay {
+            opacity: 1;
+            background: linear-gradient(to right, rgba(0,0,0,0.3) 0%, rgba(0,0,0,0.05) 50%, transparent 100%);
+        }
+
+        /* Touch interaction tap zones */
+        .tap-zone {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            z-index: 20;
+            cursor: pointer;
+        }
+        .tap-zone.left {
+            left: 0;
+            width: 25%;
+        }
+        .tap-zone.center {
+            left: 25%;
+            width: 50%;
+        }
+        .tap-zone.right {
+            right: 0;
+            width: 25%;
+        }
+
+        /* Floating Nav Arrows */
+        .nav-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(15, 23, 42, 0.78);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #ffffff;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 45;
+            cursor: pointer;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+            transition: background 0.15s ease, transform 0.15s ease, opacity 0.3s ease;
+        }
+        .nav-arrow:active {
+            background: #0284c7;
+            transform: translateY(-50%) scale(0.92);
+        }
+        .nav-arrow.left { left: 10px; }
+        .nav-arrow.right { right: 10px; }
+        .nav-arrow.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Floating Highlighter Tool Palette */
+        .highlighter-toolbar {
+            position: absolute;
+            bottom: 86px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(16px);
+            border-radius: 30px;
+            padding: 6px 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 70;
+            opacity: 0;
+            pointer-events: none;
+            transition: transform 0.25s cubic-bezier(0.2, 1, 0.3, 1), opacity 0.25s ease;
+        }
+        .highlighter-toolbar.show {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(0);
+        }
+        .color-dot {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: transform 0.15s ease, border-color 0.15s ease;
+        }
+        .color-dot.selected {
+            transform: scale(1.22);
+            border-color: #ffffff;
+            box-shadow: 0 0 10px currentColor;
+        }
+        .hl-btn {
+            background: rgba(255, 255, 255, 0.12);
+            border: none;
+            color: #f1f5f9;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 12px;
+            padding: 4px 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .hl-btn:active {
+            background: rgba(255, 255, 255, 0.22);
+        }
+
+        /* Bottom Controls Bar */
+        .bottom-bar {
+            background: rgba(15, 23, 42, 0.96);
+            backdrop-filter: blur(16px);
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 8px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 60;
+            flex-shrink: 0;
+            transition: transform 0.3s ease;
+        }
+        .bottom-bar.hidden {
+            transform: translateY(100%);
+        }
+
+        /* Page Navigation Pill & Slider */
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 4px;
+        }
+        .page-pill {
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 20px;
+            padding: 5px 14px;
+            font-size: 13px;
+            font-weight: bold;
+            color: #f8fafc;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s ease;
+        }
+        .page-pill:active {
+            background: rgba(56, 189, 248, 0.25);
+            border-color: #38bdf8;
+        }
+        .page-slider {
+            flex: 1;
+            height: 6px;
+            accent-color: #38bdf8;
+            cursor: pointer;
+        }
+        .total-page-num {
+            font-size: 12px;
+            color: #94a3b8;
+            font-weight: 600;
+        }
+
+        /* Bottom Action Buttons Row */
+        .tools-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            gap: 8px;
+            padding-top: 2px;
+        }
+        .tool-pill {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #e2e8f0;
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-size: 12px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+        }
+        .tool-pill:active {
+            transform: scale(0.96);
+            background: rgba(255, 255, 255, 0.18);
+        }
+        .tool-pill.active {
+            background: rgba(14, 165, 233, 0.28);
+            border-color: #38bdf8;
+            color: #38bdf8;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.3);
+        }
+        .tool-pill svg {
+            width: 16px;
+            height: 16px;
+            stroke-width: 2.2;
+            fill: none;
+            stroke: currentColor;
+            flex-shrink: 0;
+        }
+
+        /* Color filters */
+        body.dark-mode .book-frame {
+            filter: invert(0.9) hue-rotate(180deg);
+        }
+
+        /* Full-screen Loading & Download Completion Overlay */
+        .loading-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(10, 14, 20, 0.97);
+            backdrop-filter: blur(16px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            padding: 24px;
+            text-align: center;
+            transition: opacity 0.35s ease;
+        }
+        .loading-overlay.fade-out {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .download-card {
+            background: rgba(26, 32, 44, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 20px;
+            padding: 28px 24px;
+            width: 100%;
+            max-width: 340px;
+            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .book-icon-anim {
+            width: 58px;
+            height: 58px;
+            background: rgba(14, 165, 233, 0.15);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #38bdf8;
+            margin-bottom: 16px;
+            animation: pulseBook 1.5s ease-in-out infinite;
+        }
+        @keyframes pulseBook {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.06); }
+        }
+
+        .loading-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 6px;
+        }
+        .loading-subtitle {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 18px;
+        }
+
+        .progress-container {
+            width: 100%;
+            margin-bottom: 12px;
+        }
+        .progress-bar-bg {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #0284c7, #38bdf8);
+            border-radius: 4px;
+            transition: width 0.15s ease-out;
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.6);
+        }
+
+        .progress-meta {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            font-size: 12px;
+            font-weight: 600;
+            color: #cbd5e1;
+            margin-top: 6px;
+        }
+        .percent-text {
+            color: #38bdf8;
+            font-weight: 700;
+        }
+
+        .loading-note {
+            font-size: 11px;
+            color: #64748b;
+            margin-top: 10px;
+            line-height: 1.4;
+        }
+
+        /* All Pages Full Grid Modal */
+        .pages-grid-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(10, 15, 26, 0.94);
+            backdrop-filter: blur(14px);
+            z-index: 120;
+            display: none;
+            flex-direction: column;
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+        .pages-grid-modal.open {
+            display: flex;
+            opacity: 1;
+        }
+        .grid-header {
+            height: calc(54px + env(safe-area-inset-top, 0px));
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-left: 16px;
+            padding-right: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(15, 23, 42, 0.95);
+            flex-shrink: 0;
+        }
+        .grid-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #f8fafc;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .grid-close-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #ffffff;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .grid-close-btn:active {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        .grid-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 12px calc(24px + env(safe-area-inset-bottom, 0px));
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+            gap: 12px;
+            align-content: flex-start;
+        }
+        .page-card {
+            background: #1e293b;
+            border: 1.5px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            cursor: pointer;
+            transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+            position: relative;
+        }
+        .page-card:active {
+            transform: scale(0.94);
+        }
+        .page-card.current {
+            border-color: #38bdf8;
+            box-shadow: 0 0 14px rgba(56, 189, 248, 0.45);
+        }
+        .card-thumb-wrap {
+            width: 100%;
+            aspect-ratio: 1 / 1.414;
+            background: #f8fafc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+        .card-thumb-canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+        .card-thumb-placeholder {
+            font-size: 16px;
+            font-weight: 700;
+            color: #64748b;
+        }
+        .card-footer {
+            padding: 6px 4px;
+            text-align: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: #e2e8f0;
+            background: #0f172a;
+        }
+        .page-card.current .card-footer {
+            background: #0284c7;
+            color: #ffffff;
+        }
+
+        /* Note Modal */
+        .note-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 120;
+            padding: 20px;
+        }
+        .note-card {
+            background: #1e293b;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 18px;
+            padding: 20px;
+            width: 100%;
+            max-width: 360px;
+            box-shadow: 0 20px 35px rgba(0,0,0,0.6);
+        }
+        .note-card h4 {
+            font-size: 15px;
+            margin-bottom: 12px;
+            color: #f1f5f9;
+        }
+        .note-card textarea {
+            width: 100%;
+            height: 120px;
+            background: #0f172a;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            padding: 10px;
+            color: #ffffff;
+            font-family: inherit;
+            font-size: 13px;
+            resize: none;
+            outline: none;
+        }
+        .note-card textarea:focus {
+            border-color: #38bdf8;
+        }
+        .note-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .note-actions button {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+        }
+        .btn-cancel {
+            background: rgba(255, 255, 255, 0.1);
+            color: #cbd5e1;
+        }
+        .btn-save {
+            background: #0284c7;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <!-- Top Bar -->
+    <div class="top-bar" id="topBar">
+        <div class="top-left">
+            <button class="back-btn" id="btnBack" aria-label="Back">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <span class="chapter-title" id="chapterTitleText">পিডিএফ রিডার</span>
+        </div>
+        <div class="top-right">
+            <button class="note-btn" id="btnOpenNote">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                নোট
+            </button>
+            <button class="icon-btn" id="btnZoomIn" title="জুম ইন">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="11" x2="11" y1="8" y2="14"/><line x1="8" x2="14" y1="11" y2="11"/></svg>
+            </button>
+            <button class="icon-btn" id="btnZoomOut" title="জুম আউট">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main 3D Horizontal Flipbook Stage with Touch Pan & Pinch Zoom -->
+    <div class="flipbook-stage" id="flipbookStage">
+        <!-- Tap Interaction Zones -->
+        <div class="tap-zone left" id="tapZoneLeft" title="পূর্ববর্তী পৃষ্ঠা"></div>
+        <div class="tap-zone center" id="tapZoneCenter" title="টুলবার লুকান / দেখান"></div>
+        <div class="tap-zone right" id="tapZoneRight" title="পরবর্তী পৃষ্ঠা"></div>
+
+        <!-- Book Frame -->
+        <div class="book-frame" id="bookFrame">
+            <!-- Current Visible Page Sheet -->
+            <div class="page-sheet" id="pageSheet">
+                <div class="book-spine-effect"></div>
+                <canvas id="mainCanvas"></canvas>
+                <!-- Transparent Canvas for smooth highlighter drawings -->
+                <canvas id="highlightCanvas" class="highlight-canvas"></canvas>
+            </div>
+
+            <!-- 3D Turning Leaf (For AnyFlip animated page turn) -->
+            <div class="flip-leaf" id="flipLeaf">
+                <div class="flip-leaf-front" id="flipLeafFront">
+                    <canvas id="leafFrontCanvas"></canvas>
+                    <div class="flip-shadow-overlay"></div>
+                </div>
+                <div class="flip-leaf-back" id="flipLeafBack">
+                    <canvas id="leafBackCanvas"></canvas>
+                    <div class="flip-shadow-overlay"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Floating Navigation Arrows -->
+        <button class="nav-arrow left" id="btnPrevPage" aria-label="Previous Page">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <button class="nav-arrow right" id="btnNextPage" aria-label="Next Page">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+
+        <!-- Floating Highlighter Control Palette -->
+        <div class="highlighter-toolbar" id="highlighterToolbar">
+            <div class="color-dot selected" data-color="rgba(250, 204, 21, 0.45)" style="background:#facc15;" title="হলুদ মার্কার"></div>
+            <div class="color-dot" data-color="rgba(74, 222, 128, 0.45)" style="background:#4ade80;" title="সবুজ মার্কার"></div>
+            <div class="color-dot" data-color="rgba(244, 114, 182, 0.45)" style="background:#f472b6;" title="গোলাপি মার্কার"></div>
+            <div class="color-dot" data-color="rgba(251, 146, 60, 0.45)" style="background:#fb923c;" title="কমলা মার্কার"></div>
+            <button class="hl-btn" id="btnUndoHighlight" title="আগের দাগ মুছুন">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H11"/></svg>
+                আগের দাগ
+            </button>
+            <button class="hl-btn" id="btnClearHighlight" title="সব দাগ মুছুন">
+                মুছুন
+            </button>
+            <button class="hl-btn" id="btnCloseHighlight" style="background:#0284c7; color:#fff;">
+                সম্পন্ন
+            </button>
+        </div>
+    </div>
+
+    <!-- Bottom Controls Bar -->
+    <div class="bottom-bar" id="bottomBar">
+        <!-- Page Slider Row -->
+        <div class="slider-row">
+            <button class="icon-btn" id="btnFirstPage" style="padding:4px;" title="প্রথম পৃষ্ঠা">
+                <svg width="18" height="18" viewBox="0 0 24 24"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></svg>
+            </button>
+            <div class="page-pill" id="pagePill" title="পৃষ্ঠা তালিকা">
+                পৃষ্ঠা: <span id="curPageNum">1</span> / <span id="totalPageNum">1</span>
+            </div>
+            <input type="range" class="page-slider" id="pageSlider" min="1" max="1" value="1">
+            <span class="total-page-num" id="sliderTotalPage">1</span>
+            <button class="icon-btn" id="btnLastPage" style="padding:4px;" title="শেষ পৃষ্ঠা">
+                <svg width="18" height="18" viewBox="0 0 24 24"><path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/></svg>
+            </button>
+        </div>
+
+        <!-- Tool Pills: Clean, uncluttered layout with Highlighter, All Pages Grid, Zoom Reset, and Dark Mode -->
+        <div class="tools-row">
+            <button class="tool-pill" id="btnToggleHighlighter" title="বইয়ের পৃষ্ঠায় দাগ দেওয়ার হাইলাইটার">
+                <svg viewBox="0 0 24 24"><path d="m9 11-6 6v3h3l6-6"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+                হাইলাইটার
+            </button>
+            <button class="tool-pill" id="btnShowAllPages" title="সকল পৃষ্ঠা একসাথে দেখুন">
+                <svg viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                সকল পৃষ্ঠা
+            </button>
+            <button class="tool-pill" id="btnResetZoom" style="display:none;" title="স্বাভাবিক আকারে ফিরুন">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/></svg>
+                রিসেট জুম
+            </button>
+            <button class="tool-pill" id="btnToggleDark" title="নাইট মোড চালু / বন্ধ">
+                <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                নাইট মোড
+            </button>
+        </div>
+    </div>
+
+    <!-- All Pages Grid Modal -->
+    <div class="pages-grid-modal" id="pagesGridModal">
+        <div class="grid-header">
+            <div class="grid-title">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.2"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                সকল পৃষ্ঠা (<span id="modalTotalPages">১</span> টি পাতা)
+            </div>
+            <button class="grid-close-btn" id="btnCloseGridModal" aria-label="Close">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="grid-container" id="gridContainer">
+            <!-- Dynamically populated page thumbnail cards -->
+        </div>
+    </div>
+
+    <!-- Full-Screen 100% Download Completion Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="download-card">
+            <div class="book-icon-anim">
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+                    <path d="M6 6h10"></path>
+                    <path d="M6 10h10"></path>
+                </svg>
+            </div>
+            <div class="loading-title" id="loadingTitle">অধ্যায় ডাউনলোড হচ্ছে...</div>
+            <div class="loading-subtitle" id="loadingSubtitle">সম্পূর্ণ ডাউনলোড হওয়ার পর স্বয়ংক্রিয়ভাবে এইচডি ভিউ ওপেন হবে</div>
+            
+            <div class="progress-container">
+                <div class="progress-bar-bg">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                </div>
+                <div class="progress-meta">
+                    <span id="loadingSize">০.০ MB ডাউনলোড</span>
+                    <span class="percent-text" id="loadingPercentText">০%</span>
+                </div>
+            </div>
+
+            <div class="loading-note">
+                ১০০% ডাউনলোড সম্পন্ন হলে আপনি ইন্টারনেট ছাড়াও অফলাইনে যেকোনো সময় বইটি পড়তে পারবেন।
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Note Modal -->
+    <div class="note-modal" id="noteModal">
+        <div class="note-card">
+            <h4>অধ্যায় নোট</h4>
+            <textarea id="noteInputText" placeholder="আপনার প্রয়োজনীয় নোট লিখুন..."></textarea>
+            <div class="note-actions">
+                <button class="btn-cancel" id="btnCancelNote">বাতিল</button>
+                <button class="btn-save" id="btnSaveNote">সংরক্ষণ করুন</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = './pdfjs/pdf.worker.min.js';
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const chapterId = urlParams.get('id') || 'chapter';
+        const chapterTitle = urlParams.get('title') || 'পিডিএফ বই';
+        const rawDriveUrl = urlParams.get('url') || '';
+
+        document.getElementById('chapterTitleText').textContent = chapterTitle;
+
+        function getDriveFileId(url) {
+            if (!url) return '';
+            const m1 = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+            if (m1) return m1[1];
+            const m2 = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+            if (m2) return m2[1];
+            return '';
+        }
+
+        const driveFileId = getDriveFileId(rawDriveUrl);
+        const downloadUrl = driveFileId ? `https://drive.google.com/uc?export=download&id=${driveFileId}` : rawDriveUrl;
+
+        let pdfDoc = null;
+        let currentPage = 1;
+        let totalPages = 1;
+        
+        // Crisp HD default render scale (sharp high resolution)
+        let renderScale = 2.8;
+        let isDarkMode = false;
+        let isControlsHidden = false;
+        let isFlipping = false;
+
+        // Smooth Zoom & Pan state
+        let currentZoom = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let isPanning = false;
+
+        // Highlighter state
+        let isHighlighterActive = false;
+        let currentHighlighterColor = 'rgba(250, 204, 21, 0.45)';
+        let isDrawing = false;
+        let currentStroke = [];
+        // Map: pageNum -> array of strokes (each stroke: { color, width, points: [{x, y}] })
+        let pageHighlights = {};
+
+        // Load persisted highlights from localStorage
+        try {
+            const savedHl = localStorage.getItem(`highlights_${chapterId}`);
+            if (savedHl) {
+                pageHighlights = JSON.parse(savedHl);
+            }
+        } catch (_) {}
+
+        function saveHighlightsToStorage() {
+            try {
+                localStorage.setItem(`highlights_${chapterId}`, JSON.stringify(pageHighlights));
+            } catch (_) {}
+        }
+
+        // Render cache: pageNum -> { canvas, width, height }
+        const renderedCache = new Map();
+
+        // UI elements
+        const flipbookStage = document.getElementById('flipbookStage');
+        const bookFrame = document.getElementById('bookFrame');
+        const mainCanvas = document.getElementById('mainCanvas');
+        const highlightCanvas = document.getElementById('highlightCanvas');
+        const hlCtx = highlightCanvas.getContext('2d');
+        const flipLeaf = document.getElementById('flipLeaf');
+        const leafFrontCanvas = document.getElementById('leafFrontCanvas');
+        const leafBackCanvas = document.getElementById('leafBackCanvas');
+        
+        const topBar = document.getElementById('topBar');
+        const bottomBar = document.getElementById('bottomBar');
+        const btnPrevPage = document.getElementById('btnPrevPage');
+        const btnNextPage = document.getElementById('btnNextPage');
+        const curPageNum = document.getElementById('curPageNum');
+        const totalPageNum = document.getElementById('totalPageNum');
+        const sliderTotalPage = document.getElementById('sliderTotalPage');
+        const pageSlider = document.getElementById('pageSlider');
+
+        const loadingOverlay = document.getElementById('loadingOverlay');
+        const loadingTitle = document.getElementById('loadingTitle');
+        const loadingSubtitle = document.getElementById('loadingSubtitle');
+        const progressBarFill = document.getElementById('progressBarFill');
+        const loadingSize = document.getElementById('loadingSize');
+        const loadingPercentText = document.getElementById('loadingPercentText');
+
+        const btnToggleHighlighter = document.getElementById('btnToggleHighlighter');
+        const highlighterToolbar = document.getElementById('highlighterToolbar');
+        const btnShowAllPages = document.getElementById('btnShowAllPages');
+        const pagesGridModal = document.getElementById('pagesGridModal');
+        const gridContainer = document.getElementById('gridContainer');
+        const modalTotalPages = document.getElementById('modalTotalPages');
+        const btnCloseGridModal = document.getElementById('btnCloseGridModal');
+        const btnResetZoom = document.getElementById('btnResetZoom');
+
+        // Back button to React app
+        document.getElementById('btnBack').addEventListener('click', () => {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'CLOSE_PDF_VIEWER' }, '*');
+            } else {
+                window.history.back();
+            }
+        });
+
+        // Toggle UI controls (Fullscreen immersive mode)
+        function toggleControls() {
+            if (isPanning || currentZoom > 1.05 || isHighlighterActive) return;
+            isControlsHidden = !isControlsHidden;
+            topBar.classList.toggle('hidden', isControlsHidden);
+            bottomBar.classList.toggle('hidden', isControlsHidden);
+            btnPrevPage.classList.toggle('hidden', isControlsHidden);
+            btnNextPage.classList.toggle('hidden', isControlsHidden);
+        }
+
+        document.getElementById('tapZoneCenter').addEventListener('click', toggleControls);
+
+        // Apply Zoom and Pan transform
+        function updateTransform(smooth = false) {
+            bookFrame.style.transition = smooth ? 'transform 0.25s cubic-bezier(0.2, 1, 0.3, 1)' : 'none';
+            bookFrame.style.transform = `translate3d(${Math.round(panX)}px, ${Math.round(panY)}px, 0px) scale(${currentZoom})`;
+            
+            if (currentZoom > 1.05) {
+                btnResetZoom.style.display = 'flex';
+                btnResetZoom.textContent = `রিসেট (${Math.round(currentZoom * 100)}%)`;
+            } else {
+                btnResetZoom.style.display = 'none';
+            }
+        }
+
+        function resetZoomAndPan() {
+            currentZoom = 1.0;
+            panX = 0;
+            panY = 0;
+            updateTransform(true);
+        }
+
+        btnResetZoom.addEventListener('click', resetZoomAndPan);
+
+        // Clamping pan offsets to prevent page from getting lost
+        function clampPan() {
+            const stageW = flipbookStage.clientWidth;
+            const stageH = flipbookStage.clientHeight;
+            const bookW = bookFrame.offsetWidth * currentZoom;
+            const bookH = bookFrame.offsetHeight * currentZoom;
+
+            const maxPanX = Math.max(0, (bookW - stageW) / 2 + 40);
+            const maxPanY = Math.max(0, (bookH - stageH) / 2 + 40);
+
+            panX = Math.max(-maxPanX, Math.min(maxPanX, panX));
+            panY = Math.max(-maxPanY, Math.min(maxPanY, panY));
+        }
+
+        // IndexedDB Cache
+        const DB_NAME = 'Class7PdfCache';
+        const STORE_NAME = 'pdfs';
+
+        function openPdfDatabase() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, 1);
+                req.onupgradeneeded = (e) => {
+                    const db = e.target.result;
+                    if (!db.objectStoreNames.contains(STORE_NAME)) {
+                        db.createObjectStore(STORE_NAME);
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function getCachedPdf(id) {
+            try {
+                const db = await openPdfDatabase();
+                return new Promise((resolve) => {
+                    const tx = db.transaction(STORE_NAME, 'readonly');
+                    const store = tx.objectStore(STORE_NAME);
+                    const getReq = store.get(id);
+                    getReq.onsuccess = () => resolve(getReq.result);
+                    getReq.onerror = () => resolve(null);
+                });
+            } catch (_) {
+                return null;
+            }
+        }
+
+        async function saveCachedPdf(id, arrayBuffer) {
+            try {
+                try {
+                    const list = JSON.parse(localStorage.getItem('downloaded_chapter_ids') || '[]');
+                    if (!list.includes(id)) {
+                        list.push(id);
+                        localStorage.setItem('downloaded_chapter_ids', JSON.stringify(list));
+                    }
+                } catch (_) {}
+
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage({ type: 'PDF_DOWNLOAD_COMPLETE', chapterId: id }, '*');
+                }
+
+                const db = await openPdfDatabase();
+                return new Promise((resolve) => {
+                    const tx = db.transaction(STORE_NAME, 'readwrite');
+                    const store = tx.objectStore(STORE_NAME);
+                    store.put(arrayBuffer, id);
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => resolve(false);
+                });
+            } catch (_) {}
+        }
+
+        // Live progress display function
+        function updateProgress(percent, loadedMb, totalMb) {
+            percent = Math.max(0, Math.min(100, Math.round(percent)));
+            progressBarFill.style.width = `${percent}%`;
+            loadingPercentText.textContent = `${percent}%`;
+            
+            if (loadedMb) {
+                if (totalMb) {
+                    loadingSize.textContent = `${loadedMb}MB / ${totalMb}MB`;
+                } else {
+                    loadingSize.textContent = `${loadedMb}MB ডাউনলোড হয়েছে`;
+                }
+            }
+            if (percent >= 100) {
+                loadingTitle.textContent = '১০০% ডাউনলোড সম্পন্ন!';
+                loadingSubtitle.textContent = 'এইচডি ভিউ প্রস্তুত হচ্ছে...';
+            }
+        }
+
+        window.__onDownloadProgress = function(percent, loadedMb, totalMb) {
+            updateProgress(percent, loadedMb, totalMb);
+        };
+
+        // Master Download & Loading Logic
+        async function startDownloadAndLoad() {
+            try {
+                // 1. First check if already downloaded in Android native memory!
+                if (window.Android && window.Android.isPdfDownloaded && window.Android.isPdfDownloaded(chapterId)) {
+                    loadingTitle.textContent = 'ফোন মেমোরি থেকে ওপেন হচ্ছে...';
+                    loadingSubtitle.textContent = 'অফলাইন ফাইল লোড হচ্ছে...';
+                    updateProgress(100, '', '');
+                    if (window.Android.getPdfBase64) {
+                        try {
+                            const b64 = window.Android.getPdfBase64(chapterId);
+                            if (b64) {
+                                const binaryString = atob(b64);
+                                const len = binaryString.length;
+                                const bytes = new Uint8Array(len);
+                                for (let i = 0; i < len; i++) {
+                                    bytes[i] = binaryString.charCodeAt(i);
+                                }
+                                await initPdfDocument(bytes.buffer);
+                                return;
+                            }
+                        } catch (e) {
+                            console.error('Failed to load from native base64:', e);
+                        }
+                    }
+                }
+
+                // 2. Check IndexedDB cache
+                const cachedBuffer = await getCachedPdf(chapterId);
+                if (cachedBuffer) {
+                    updateProgress(100, '', '');
+                    loadingTitle.textContent = 'ফোন মেমোরি থেকে ওপেন হচ্ছে...';
+                    loadingSubtitle.textContent = 'অফলাইন ক্যাশ লোড হচ্ছে...';
+                    await initPdfDocument(cachedBuffer);
+                    return;
+                }
+
+                if (window.Android && window.Android.downloadPdf) {
+                    loadingTitle.textContent = 'মোবাইলে ডাউনলোড হচ্ছে...';
+                    loadingSubtitle.textContent = 'সম্পূর্ণ ১০০% ডাউনলোড হওয়ার পর বই ওপেন হবে';
+                    updateProgress(5, '0.1', '');
+
+                    window.__onPdfDownloaded = async function(result) {
+                        if (result) {
+                            try {
+                                updateProgress(100, '', '');
+                                if (typeof result === 'string' && result.startsWith('file://')) {
+                                    try {
+                                        const list = JSON.parse(localStorage.getItem('downloaded_chapter_ids') || '[]');
+                                        if (!list.includes(chapterId)) {
+                                            list.push(chapterId);
+                                            localStorage.setItem('downloaded_chapter_ids', JSON.stringify(list));
+                                        }
+                                    } catch (_) {}
+                                    if (window.parent && window.parent !== window) {
+                                        window.parent.postMessage({ type: 'PDF_DOWNLOAD_COMPLETE', chapterId: chapterId }, '*');
+                                    }
+                                    await initPdfDocument(result);
+                                    return;
+                                } else {
+                                    const binaryString = atob(result);
+                                    const len = binaryString.length;
+                                    const bytes = new Uint8Array(len);
+                                    for (let i = 0; i < len; i++) {
+                                        bytes[i] = binaryString.charCodeAt(i);
+                                    }
+                                    await saveCachedPdf(chapterId, bytes.buffer);
+                                    await initPdfDocument(bytes.buffer);
+                                    return;
+                                }
+                            } catch (err) {
+                                console.error('Error handling downloaded pdf:', err);
+                            }
+                        }
+                        fetchWithXhr();
+                    };
+
+                    window.Android.downloadPdf(chapterId, downloadUrl, 'window.__onPdfDownloaded');
+                    return;
+                }
+
+                fetchWithXhr();
+            } catch (err) {
+                console.error('startDownloadAndLoad error:', err);
+                fetchWithXhr();
+            }
+        }
+
+        function fetchWithXhr() {
+            loadingTitle.textContent = 'মোবাইলে ডাউনলোড হচ্ছে...';
+            updateProgress(0, '0.0', '');
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', downloadUrl, true);
+            xhr.responseType = 'arraybuffer';
+
+            xhr.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    const loadedMb = (e.loaded / (1024 * 1024)).toFixed(1);
+                    const totalMb = (e.total / (1024 * 1024)).toFixed(1);
+                    updateProgress(percent, loadedMb, totalMb);
+                } else {
+                    const loadedMb = (e.loaded / (1024 * 1024)).toFixed(1);
+                    updateProgress(50, loadedMb, '');
+                }
+            };
+
+            xhr.onload = async () => {
+                if (xhr.status === 200) {
+                    updateProgress(100, '', '');
+                    const buffer = xhr.response;
+                    await saveCachedPdf(chapterId, buffer);
+                    await initPdfDocument(buffer);
+                } else {
+                    fallbackIframe();
+                }
+            };
+
+            xhr.onerror = () => {
+                fallbackIframe();
+            };
+
+            xhr.send();
+        }
+
+        function fallbackIframe() {
+            loadingOverlay.style.display = 'none';
+            flipbookStage.innerHTML = `
+                <iframe src="${rawDriveUrl}" style="width:100%; height:100%; border:none; background:#fff;"></iframe>
+            `;
+        }
+
+        // Initialize PDF Document
+        async function initPdfDocument(source) {
+            try {
+                const docConfig = typeof source === 'string' ? { url: source } : { data: source };
+                docConfig.cMapUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/';
+                docConfig.cMapPacked = true;
+
+                const loadingTask = pdfjsLib.getDocument(docConfig);
+                pdfDoc = await loadingTask.promise;
+                totalPages = pdfDoc.numPages;
+
+                totalPageNum.textContent = totalPages;
+                sliderTotalPage.textContent = totalPages;
+                modalTotalPages.textContent = totalPages;
+                pageSlider.max = totalPages;
+
+                const firstPage = await pdfDoc.getPage(1);
+                const viewport1 = firstPage.getViewport({ scale: 1 });
+                const pageAspect = viewport1.width / viewport1.height;
+                adjustBookDimensions(pageAspect);
+
+                // Render Page 1 in crisp HD quality
+                await renderPageToCanvas(1, mainCanvas);
+                syncHighlightCanvas();
+                redrawHighlightsForPage(1);
+
+                if (totalPages > 1) {
+                    precachePage(2);
+                }
+
+                loadingOverlay.classList.add('fade-out');
+                setTimeout(() => {
+                    loadingOverlay.style.display = 'none';
+                }, 350);
+
+                updateNavigationState();
+            } catch (err) {
+                console.error('Failed to init PDF Document:', err);
+                if (typeof source === 'string' && window.Android && window.Android.getPdfBase64) {
+                    try {
+                        const b64 = window.Android.getPdfBase64(chapterId);
+                        if (b64) {
+                            const binaryString = atob(b64);
+                            const len = binaryString.length;
+                            const bytes = new Uint8Array(len);
+                            for (let i = 0; i < len; i++) {
+                                bytes[i] = binaryString.charCodeAt(i);
+                            }
+                            await saveCachedPdf(chapterId, bytes.buffer);
+                            await initPdfDocument(bytes.buffer);
+                            return;
+                        }
+                    } catch (e2) {
+                        console.error('getPdfBase64 fallback failed:', e2);
+                    }
+                }
+                fallbackIframe();
+            }
+        }
+
+        function adjustBookDimensions(aspectRatio) {
+            const stageW = flipbookStage.clientWidth - 16;
+            const stageH = flipbookStage.clientHeight - 18;
+
+            let bookW, bookH;
+            if (stageW / stageH < aspectRatio) {
+                bookW = stageW;
+                bookH = stageW / aspectRatio;
+            } else {
+                bookH = stageH;
+                bookW = stageH * aspectRatio;
+            }
+
+            bookFrame.style.width = `${Math.round(bookW)}px`;
+            bookFrame.style.height = `${Math.round(bookH)}px`;
+            syncHighlightCanvas();
+        }
+
+        window.addEventListener('resize', async () => {
+            if (!pdfDoc) return;
+            try {
+                const page = await pdfDoc.getPage(currentPage);
+                const vp = page.getViewport({ scale: 1 });
+                adjustBookDimensions(vp.width / vp.height);
+                clampPan();
+                updateTransform();
+            } catch (_) {}
+        });
+
+        // Synchronize highlighter canvas resolution with main canvas
+        function syncHighlightCanvas() {
+            if (!mainCanvas.width || !mainCanvas.height) return;
+            highlightCanvas.width = mainCanvas.width;
+            highlightCanvas.height = mainCanvas.height;
+        }
+
+        // Render a page onto a specified canvas in Default Crisp HD
+        async function renderPageToCanvas(pageNum, targetCanvas) {
+            if (pageNum < 1 || pageNum > totalPages) return;
+
+            if (renderedCache.has(pageNum)) {
+                const cached = renderedCache.get(pageNum);
+                targetCanvas.width = cached.width;
+                targetCanvas.height = cached.height;
+                const ctx = targetCanvas.getContext('2d', { alpha: false });
+                ctx.drawImage(cached.canvas, 0, 0);
+                return;
+            }
+
+            try {
+                const page = await pdfDoc.getPage(pageNum);
+                const dpr = Math.max(window.devicePixelRatio || 1, 2);
+                const scale = renderScale * (dpr / 2);
+                const viewport = page.getViewport({ scale });
+
+                targetCanvas.width = viewport.width;
+                targetCanvas.height = viewport.height;
+
+                const ctx = targetCanvas.getContext('2d', { alpha: false });
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+
+                await page.render({
+                    canvasContext: ctx,
+                    viewport: viewport
+                }).promise;
+
+                const offscreen = document.createElement('canvas');
+                offscreen.width = viewport.width;
+                offscreen.height = viewport.height;
+                const offCtx = offscreen.getContext('2d', { alpha: false });
+                offCtx.drawImage(targetCanvas, 0, 0);
+
+                renderedCache.set(pageNum, {
+                    canvas: offscreen,
+                    width: viewport.width,
+                    height: viewport.height
+                });
+            } catch (err) {
+                console.error(`Failed to render page ${pageNum}:`, err);
+            }
+        }
+
+        async function precachePage(pageNum) {
+            if (pageNum < 1 || pageNum > totalPages || renderedCache.has(pageNum)) return;
+            const dummy = document.createElement('canvas');
+            await renderPageToCanvas(pageNum, dummy);
+        }
+
+        function updateNavigationState() {
+            curPageNum.textContent = currentPage;
+            pageSlider.value = currentPage;
+
+            btnPrevPage.style.opacity = currentPage <= 1 ? '0.3' : '1';
+            btnNextPage.style.opacity = currentPage >= totalPages ? '0.3' : '1';
+        }
+
+        // Flip to Target Page smoothly
+        async function flipToPage(targetPage, direction = 'auto') {
+            if (isFlipping || targetPage < 1 || targetPage > totalPages || targetPage === currentPage) return;
+
+            // Reset zoom when navigating to another page
+            if (currentZoom > 1.05) {
+                resetZoomAndPan();
+            }
+
+            isFlipping = true;
+            const fromPage = currentPage;
+            const toPage = targetPage;
+            const isForward = direction === 'forward' || (direction === 'auto' && toPage > fromPage);
+
+            try {
+                if (isForward) {
+                    await renderPageToCanvas(fromPage, leafFrontCanvas);
+                    await renderPageToCanvas(toPage, leafBackCanvas);
+                    await renderPageToCanvas(toPage, mainCanvas);
+
+                    flipLeaf.className = 'flip-leaf turning-forward';
+
+                    setTimeout(() => {
+                        flipLeaf.className = 'flip-leaf';
+                        currentPage = toPage;
+                        syncHighlightCanvas();
+                        redrawHighlightsForPage(currentPage);
+                        updateNavigationState();
+                        isFlipping = false;
+
+                        if (currentPage + 1 <= totalPages) precachePage(currentPage + 1);
+                        if (currentPage - 1 >= 1) precachePage(currentPage - 1);
+                    }, 420);
+                } else {
+                    await renderPageToCanvas(toPage, leafFrontCanvas);
+                    await renderPageToCanvas(fromPage, leafBackCanvas);
+                    await renderPageToCanvas(toPage, mainCanvas);
+
+                    flipLeaf.className = 'flip-leaf turning-backward';
+
+                    setTimeout(() => {
+                        flipLeaf.className = 'flip-leaf';
+                        currentPage = toPage;
+                        syncHighlightCanvas();
+                        redrawHighlightsForPage(currentPage);
+                        updateNavigationState();
+                        isFlipping = false;
+
+                        if (currentPage + 1 <= totalPages) precachePage(currentPage + 1);
+                        if (currentPage - 1 >= 1) precachePage(currentPage - 1);
+                    }, 420);
+                }
+            } catch (e) {
+                console.error('Flip error:', e);
+                currentPage = toPage;
+                await renderPageToCanvas(currentPage, mainCanvas);
+                syncHighlightCanvas();
+                redrawHighlightsForPage(currentPage);
+                flipLeaf.className = 'flip-leaf';
+                isFlipping = false;
+                updateNavigationState();
+            }
+        }
+
+        function nextPage() {
+            if (currentPage < totalPages) {
+                flipToPage(currentPage + 1, 'forward');
+            }
+        }
+
+        function prevPage() {
+            if (currentPage > 1) {
+                flipToPage(currentPage - 1, 'backward');
+            }
+        }
+
+        // Tap zones
+        document.getElementById('tapZoneRight').addEventListener('click', () => {
+            if (!isHighlighterActive && currentZoom <= 1.05) nextPage();
+        });
+        document.getElementById('tapZoneLeft').addEventListener('click', () => {
+            if (!isHighlighterActive && currentZoom <= 1.05) prevPage();
+        });
+        btnNextPage.addEventListener('click', nextPage);
+        btnPrevPage.addEventListener('click', prevPage);
+
+        document.getElementById('btnFirstPage').addEventListener('click', () => flipToPage(1, 'backward'));
+        document.getElementById('btnLastPage').addEventListener('click', () => flipToPage(totalPages, 'forward'));
+
+        // Slider
+        pageSlider.addEventListener('input', (e) => {
+            curPageNum.textContent = e.target.value;
+        });
+        pageSlider.addEventListener('change', (e) => {
+            const val = parseInt(e.target.value, 10);
+            if (val !== currentPage) {
+                flipToPage(val);
+            }
+        });
+
+        // Page Pill prompt
+        document.getElementById('pagePill').addEventListener('click', openPagesGridModal);
+
+        // ==========================================
+        // SMOOTH PINCH-TO-ZOOM & DRAG / PAN GESTURES
+        // (হাত দিয়ে টেনে স্মুথ জুম ও ডানে-বামে নেওয়া)
+        // ==========================================
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchStartTime = 0;
+        let initialPinchDist = 0;
+        let initialZoom = 1.0;
+        let panStartX = 0;
+        let panStartY = 0;
+        let lastTapTime = 0;
+
+        flipbookStage.addEventListener('touchstart', (e) => {
+            if (isHighlighterActive) return; // Highlighter handles its own touches
+
+            if (e.touches.length === 2) {
+                // Two-finger pinch to zoom
+                const t1 = e.touches[0];
+                const t2 = e.touches[1];
+                initialPinchDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                initialZoom = currentZoom;
+                isPanning = false;
+            } else if (e.touches.length === 1) {
+                // Single finger touch: pan when zoomed, or swipe
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+                touchStartTime = Date.now();
+                panStartX = panX;
+                panStartY = panY;
+                isPanning = false;
+
+                // Double-tap detector
+                const now = Date.now();
+                if (now - lastTapTime < 300) {
+                    if (currentZoom > 1.05) {
+                        resetZoomAndPan();
+                    } else {
+                        currentZoom = 2.0;
+                        panX = (flipbookStage.clientWidth / 2 - touchStartX) * 0.8;
+                        panY = (flipbookStage.clientHeight / 2 - touchStartY) * 0.8;
+                        clampPan();
+                        updateTransform(true);
+                    }
+                    lastTapTime = 0;
+                    return;
+                }
+                lastTapTime = now;
+            }
+        }, { passive: false });
+
+        flipbookStage.addEventListener('touchmove', (e) => {
+            if (isHighlighterActive) return;
+
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                const t1 = e.touches[0];
+                const t2 = e.touches[1];
+                const currentDist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+                if (initialPinchDist > 0) {
+                    const ratio = currentDist / initialPinchDist;
+                    currentZoom = Math.max(1.0, Math.min(3.5, initialZoom * ratio));
+                    clampPan();
+                    updateTransform(false);
+                }
+            } else if (e.touches.length === 1 && currentZoom > 1.05) {
+                // Smooth drag in any direction (left, right, up, down)
+                e.preventDefault();
+                isPanning = true;
+                const deltaX = e.touches[0].clientX - touchStartX;
+                const deltaY = e.touches[0].clientY - touchStartY;
+                panX = panStartX + deltaX;
+                panY = panStartY + deltaY;
+                clampPan();
+                updateTransform(false);
+            }
+        }, { passive: false });
+
+        flipbookStage.addEventListener('touchend', (e) => {
+            if (isHighlighterActive) return;
+
+            if (e.touches.length === 0) {
+                initialPinchDist = 0;
+                if (currentZoom <= 1.05) {
+                    // Page flip horizontal swipe detection
+                    if (!isPanning && e.changedTouches.length === 1) {
+                        const deltaX = e.changedTouches[0].clientX - touchStartX;
+                        const deltaY = e.changedTouches[0].clientY - touchStartY;
+                        const elapsed = Date.now() - touchStartTime;
+
+                        if (Math.abs(deltaX) > 42 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5 && elapsed < 450) {
+                            if (deltaX < 0) {
+                                nextPage(); // Swiped left -> Next page
+                            } else {
+                                prevPage(); // Swiped right -> Previous page
+                            }
+                        }
+                    }
+                } else {
+                    clampPan();
+                    updateTransform(true);
+                }
+            }
+        }, { passive: true });
+
+        // Zoom In & Zoom Out Buttons
+        document.getElementById('btnZoomIn').addEventListener('click', () => {
+            currentZoom = Math.min(currentZoom + 0.35, 3.5);
+            clampPan();
+            updateTransform(true);
+        });
+
+        document.getElementById('btnZoomOut').addEventListener('click', () => {
+            currentZoom = Math.max(currentZoom - 0.35, 1.0);
+            if (currentZoom <= 1.05) {
+                panX = 0;
+                panY = 0;
+            }
+            clampPan();
+            updateTransform(true);
+        });
+
+        // ==========================================
+        // HIGHLIGHTER FEATURE (হাইলাইটার অপশন)
+        // ==========================================
+        function toggleHighlighter() {
+            isHighlighterActive = !isHighlighterActive;
+            btnToggleHighlighter.classList.toggle('active', isHighlighterActive);
+            highlighterToolbar.classList.toggle('show', isHighlighterActive);
+            highlightCanvas.classList.toggle('active-draw', isHighlighterActive);
+
+            if (isHighlighterActive && currentZoom > 1.05) {
+                // For comfortable highlighting, reset zoom or keep aligned
+            }
+        }
+
+        btnToggleHighlighter.addEventListener('click', toggleHighlighter);
+        document.getElementById('btnCloseHighlight').addEventListener('click', toggleHighlighter);
+
+        // Color Selection
+        document.querySelectorAll('.color-dot').forEach(dot => {
+            dot.addEventListener('click', () => {
+                document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('selected'));
+                dot.classList.add('selected');
+                currentHighlighterColor = dot.getAttribute('data-color');
+            });
+        });
+
+        // Highlighter Canvas Drawing Events
+        function getCanvasPoint(e) {
+            const rect = highlightCanvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const scaleX = highlightCanvas.width / rect.width;
+            const scaleY = highlightCanvas.height / rect.height;
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
+        }
+
+        function startHighlightDraw(e) {
+            if (!isHighlighterActive) return;
+            e.preventDefault();
+            isDrawing = true;
+            const pt = getCanvasPoint(e);
+            currentStroke = {
+                color: currentHighlighterColor,
+                width: 24,
+                points: [pt]
+            };
+        }
+
+        function moveHighlightDraw(e) {
+            if (!isDrawing || !isHighlighterActive) return;
+            e.preventDefault();
+            const pt = getCanvasPoint(e);
+            currentStroke.points.push(pt);
+
+            // Draw latest segment
+            drawStrokeSegment(currentStroke, currentStroke.points.length - 2, currentStroke.points.length - 1);
+        }
+
+        function endHighlightDraw(e) {
+            if (!isDrawing || !isHighlighterActive) return;
+            isDrawing = false;
+            if (currentStroke && currentStroke.points.length > 0) {
+                if (!pageHighlights[currentPage]) {
+                    pageHighlights[currentPage] = [];
+                }
+                pageHighlights[currentPage].push(currentStroke);
+                saveHighlightsToStorage();
+            }
+            currentStroke = null;
+        }
+
+        function drawStrokeSegment(stroke, idx1, idx2) {
+            if (idx1 < 0 || idx2 >= stroke.points.length) return;
+            const p1 = stroke.points[idx1];
+            const p2 = stroke.points[idx2];
+
+            hlCtx.beginPath();
+            hlCtx.strokeStyle = stroke.color;
+            hlCtx.lineWidth = stroke.width;
+            hlCtx.lineCap = 'round';
+            hlCtx.lineJoin = 'round';
+            hlCtx.globalCompositeOperation = 'source-over';
+            hlCtx.moveTo(p1.x, p1.y);
+            hlCtx.lineTo(p2.x, p2.y);
+            hlCtx.stroke();
+        }
+
+        function redrawHighlightsForPage(pageNum) {
+            hlCtx.clearRect(0, 0, highlightCanvas.width, highlightCanvas.height);
+            const strokes = pageHighlights[pageNum];
+            if (!strokes || strokes.length === 0) return;
+
+            strokes.forEach(stroke => {
+                if (stroke.points && stroke.points.length > 1) {
+                    hlCtx.beginPath();
+                    hlCtx.strokeStyle = stroke.color;
+                    hlCtx.lineWidth = stroke.width;
+                    hlCtx.lineCap = 'round';
+                    hlCtx.lineJoin = 'round';
+                    hlCtx.globalCompositeOperation = 'source-over';
+                    hlCtx.moveTo(stroke.points[0].x, stroke.points[0].y);
+                    for (let i = 1; i < stroke.points.length; i++) {
+                        hlCtx.lineTo(stroke.points[i].x, stroke.points[i].y);
+                    }
+                    hlCtx.stroke();
+                }
+            });
+        }
+
+        highlightCanvas.addEventListener('touchstart', startHighlightDraw, { passive: false });
+        highlightCanvas.addEventListener('touchmove', moveHighlightDraw, { passive: false });
+        highlightCanvas.addEventListener('touchend', endHighlightDraw, { passive: false });
+        highlightCanvas.addEventListener('mousedown', startHighlightDraw);
+        window.addEventListener('mousemove', moveHighlightDraw);
+        window.addEventListener('mouseup', endHighlightDraw);
+
+        // Undo & Clear Highlights
+        document.getElementById('btnUndoHighlight').addEventListener('click', () => {
+            if (pageHighlights[currentPage] && pageHighlights[currentPage].length > 0) {
+                pageHighlights[currentPage].pop();
+                saveHighlightsToStorage();
+                redrawHighlightsForPage(currentPage);
+            }
+        });
+
+        document.getElementById('btnClearHighlight').addEventListener('click', () => {
+            if (confirm('এই পৃষ্ঠার সব হাইলাইটার দাগ মুছে ফেলতে চান?')) {
+                pageHighlights[currentPage] = [];
+                saveHighlightsToStorage();
+                redrawHighlightsForPage(currentPage);
+            }
+        });
+
+        // ==========================================
+        // ALL PAGES GRID MODAL (সকল পৃষ্ঠা ভিউ)
+        // ==========================================
+        function openPagesGridModal() {
+            gridContainer.innerHTML = '';
+            pagesGridModal.classList.add('open');
+
+            // Render interactive cards for every page
+            for (let p = 1; p <= totalPages; p++) {
+                const card = document.createElement('div');
+                card.className = `page-card ${p === currentPage ? 'current' : ''}`;
+                card.id = `pageCard_${p}`;
+
+                const thumbWrap = document.createElement('div');
+                thumbWrap.className = 'card-thumb-wrap';
+
+                // Check if page already rendered in memory cache
+                if (renderedCache.has(p)) {
+                    const c = document.createElement('canvas');
+                    c.className = 'card-thumb-canvas';
+                    const src = renderedCache.get(p);
+                    c.width = src.width;
+                    c.height = src.height;
+                    c.getContext('2d').drawImage(src.canvas, 0, 0);
+                    thumbWrap.appendChild(c);
+                } else {
+                    const placeholder = document.createElement('div');
+                    placeholder.className = 'card-thumb-placeholder';
+                    placeholder.textContent = p;
+                    thumbWrap.appendChild(placeholder);
+                    // Lazy generate thumbnail in background
+                    lazyLoadCardThumbnail(p, thumbWrap);
+                }
+
+                const footer = document.createElement('div');
+                footer.className = 'card-footer';
+                footer.textContent = p === currentPage ? `✓ পৃষ্ঠা ${p}` : `পৃষ্ঠা ${p}`;
+
+                card.appendChild(thumbWrap);
+                card.appendChild(footer);
+
+                card.addEventListener('click', () => {
+                    closePagesGridModal();
+                    if (p !== currentPage) {
+                        flipToPage(p);
+                    }
+                });
+
+                gridContainer.appendChild(card);
+            }
+
+            // Scroll active card into view
+            setTimeout(() => {
+                const activeCard = document.getElementById(`pageCard_${currentPage}`);
+                if (activeCard) {
+                    activeCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                }
+            }, 100);
+        }
+
+        async function lazyLoadCardThumbnail(pageNum, container) {
+            try {
+                if (!pdfDoc) return;
+                const page = await pdfDoc.getPage(pageNum);
+                const vp = page.getViewport({ scale: 0.38 });
+                const thumbCanvas = document.createElement('canvas');
+                thumbCanvas.className = 'card-thumb-canvas';
+                thumbCanvas.width = vp.width;
+                thumbCanvas.height = vp.height;
+                const ctx = thumbCanvas.getContext('2d', { alpha: false });
+                ctx.imageSmoothingEnabled = true;
+
+                await page.render({
+                    canvasContext: ctx,
+                    viewport: vp
+                }).promise;
+
+                container.innerHTML = '';
+                container.appendChild(thumbCanvas);
+            } catch (_) {}
+        }
+
+        function closePagesGridModal() {
+            pagesGridModal.classList.remove('open');
+        }
+
+        btnShowAllPages.addEventListener('click', openPagesGridModal);
+        btnCloseGridModal.addEventListener('click', closePagesGridModal);
+
+        // Dark mode
+        document.getElementById('btnToggleDark').addEventListener('click', () => {
+            isDarkMode = !isDarkMode;
+            document.body.classList.toggle('dark-mode', isDarkMode);
+            document.getElementById('btnToggleDark').classList.toggle('active', isDarkMode);
+        });
+
+        // Note Modal
+        const noteModal = document.getElementById('noteModal');
+        const noteInputText = document.getElementById('noteInputText');
+
+        document.getElementById('btnOpenNote').addEventListener('click', () => {
+            const saved = localStorage.getItem(`chapter_note_${chapterId}`) || '';
+            noteInputText.value = saved;
+            noteModal.style.display = 'flex';
+        });
+
+        document.getElementById('btnCancelNote').addEventListener('click', () => {
+            noteModal.style.display = 'none';
+        });
+
+        document.getElementById('btnSaveNote').addEventListener('click', () => {
+            localStorage.setItem(`chapter_note_${chapterId}`, noteInputText.value);
+            noteModal.style.display = 'none';
+            alert('নোট সংরক্ষিত হয়েছে!');
+        });
+
+        // Keyboard navigation
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+                nextPage();
+            } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+                prevPage();
+            } else if (e.key === 'Escape') {
+                if (pagesGridModal.classList.contains('open')) closePagesGridModal();
+                if (isHighlighterActive) toggleHighlighter();
+            }
+        });
+
+        // Launch Download & Flipbook process
+        startDownloadAndLoad();
+    </script>
+</body>
+</html>
