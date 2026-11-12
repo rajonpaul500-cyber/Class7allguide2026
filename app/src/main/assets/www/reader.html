@@ -336,7 +336,7 @@
         /* Floating Highlighter Tool Palette */
         .highlighter-toolbar {
             position: absolute;
-            bottom: 86px;
+            bottom: 130px;
             left: 50%;
             transform: translateX(-50%) translateY(20px);
             background: rgba(15, 23, 42, 0.95);
@@ -390,16 +390,17 @@
 
         /* Bottom Controls Bar */
         .bottom-bar {
-            background: rgba(15, 23, 42, 0.96);
+            background: rgba(15, 23, 42, 0.98);
             backdrop-filter: blur(16px);
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-            padding: 8px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 10px 14px calc(24px + env(safe-area-inset-bottom, 0px));
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 10px;
             z-index: 60;
             flex-shrink: 0;
             transition: transform 0.3s ease;
+            box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.5);
         }
         .bottom-bar.hidden {
             transform: translateY(100%);
@@ -970,7 +971,7 @@
         }
 
         const driveFileId = getDriveFileId(rawDriveUrl);
-        const downloadUrl = driveFileId ? `https://drive.google.com/uc?export=download&id=${driveFileId}` : rawDriveUrl;
+        const downloadUrl = driveFileId ? `https://drive.usercontent.google.com/download?id=${driveFileId}&export=download&authuser=0&confirm=t` : rawDriveUrl;
 
         let pdfDoc = null;
         let currentPage = 1;
@@ -1054,6 +1055,14 @@
                 window.parent.postMessage({ type: 'CLOSE_PDF_VIEWER' }, '*');
             } else {
                 window.history.back();
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' || e.key === 'Back' || e.keyCode === 27) {
+                if (window.parent && window.parent !== window) {
+                    window.parent.postMessage({ type: 'CLOSE_PDF_VIEWER' }, '*');
+                }
             }
         });
 
@@ -1295,28 +1304,48 @@
             };
 
             xhr.onload = async () => {
-                if (xhr.status === 200) {
-                    updateProgress(100, '', '');
-                    const buffer = xhr.response;
-                    await saveCachedPdf(chapterId, buffer);
-                    await initPdfDocument(buffer);
-                } else {
-                    fallbackIframe();
+                if (xhr.status === 200 && xhr.response && xhr.response.byteLength > 2000) {
+                    // Check magic bytes %PDF
+                    const header = new Uint8Array(xhr.response, 0, 4);
+                    const isPdf = header[0] === 0x25 && header[1] === 0x50 && header[2] === 0x44 && header[3] === 0x46;
+                    if (isPdf) {
+                        updateProgress(100, '', '');
+                        const buffer = xhr.response;
+                        await saveCachedPdf(chapterId, buffer);
+                        await initPdfDocument(buffer);
+                        return;
+                    }
                 }
+                showDownloadError();
             };
 
             xhr.onerror = () => {
-                fallbackIframe();
+                showDownloadError();
             };
 
             xhr.send();
         }
 
-        function fallbackIframe() {
-            loadingOverlay.style.display = 'none';
-            flipbookStage.innerHTML = `
-                <iframe src="${rawDriveUrl}" style="width:100%; height:100%; border:none; background:#fff;"></iframe>
-            `;
+        function showDownloadError() {
+            loadingTitle.textContent = 'ডাউনলোড সম্পন্ন করা যায়নি';
+            loadingSubtitle.textContent = 'ইন্টারনেট চেক করে পুনরায় চেষ্টা করুন';
+            progressBarFill.style.width = '0%';
+            loadingPercentText.textContent = '০%';
+            loadingSize.textContent = 'ত্রুটি';
+            
+            const existingBtn = document.getElementById('retryDownloadBtn');
+            if (!existingBtn) {
+                const btn = document.createElement('button');
+                btn.id = 'retryDownloadBtn';
+                btn.className = 'note-btn';
+                btn.style.cssText = 'margin-top:16px; background:#0284c7; color:#fff; padding:10px 24px; border-radius:20px; font-weight:700; font-size:14px; cursor:pointer; border:none;';
+                btn.textContent = '🔄 পুনরায় চেষ্টা করুন';
+                btn.onclick = () => {
+                    btn.remove();
+                    startDownloadAndLoad();
+                };
+                document.querySelector('.download-card')?.appendChild(btn);
+            }
         }
 
         // Initialize PDF Document
@@ -1375,7 +1404,7 @@
                         console.error('getPdfBase64 fallback failed:', e2);
                     }
                 }
-                fallbackIframe();
+                showDownloadError();
             }
         }
 
