@@ -90,11 +90,14 @@ class MainActivity : ComponentActivity() {
     private var pendingInterstitialActionKey: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private var interstitialTimeoutRunnable: Runnable? = null
+    private var interstitialRetryCount = 0
 
     private var rewardedAd: RewardedAd? = null
     private var isRewardedLoading = false
     private var pendingRewardedActionKey: String? = null
     private var rewardedTimeoutRunnable: Runnable? = null
+    private var rewardedRetryCount = 0
+    private var appOpenRetryCount = 0
 
     private var bannerAdView: AdView? = null
     private var isBannerVisible = false
@@ -129,12 +132,12 @@ class MainActivity : ComponentActivity() {
             MobileAds.initialize(this) { status ->
                 Log.d(logTag, "MobileAds initialized: ${status.adapterStatusMap}")
                 runOnUiThread {
+                    setupBannerAd()
                     loadAppOpenAd()
-                    mainHandler.postDelayed({ loadInterstitialAd() }, 500L)
-                    mainHandler.postDelayed({ loadRewardedAd() }, 1000L)
+                    mainHandler.postDelayed({ loadInterstitialAd() }, 600L)
+                    mainHandler.postDelayed({ loadRewardedAd() }, 1400L)
                 }
             }
-            setupBannerAd()
         } catch (e: Exception) {
             Log.e(logTag, "MobileAds initialization error", e)
         }
@@ -750,9 +753,10 @@ class MainActivity : ComponentActivity() {
             showAppOpenAd()
         } else if (!hasShownInitialAppOpen) {
             pendingShowAppOpen = true
+            loadAppOpenAd()
             mainHandler.postDelayed({
                 pendingShowAppOpen = false
-            }, 6000L)
+            }, 8000L)
         }
     }
 
@@ -791,6 +795,7 @@ class MainActivity : ComponentActivity() {
                     Log.d(logTag, "AdMob AppOpenAd loaded successfully")
                     appOpenAd = ad
                     isAppOpenLoading = false
+                    appOpenRetryCount = 0
                     if (isSplashFinished && !hasShownInitialAppOpen && pendingShowAppOpen) {
                         pendingShowAppOpen = false
                         showAppOpenAd()
@@ -800,6 +805,10 @@ class MainActivity : ComponentActivity() {
                     Log.d(logTag, "AdMob AppOpenAd response: ${loadAdError.code} - ${loadAdError.message}")
                     appOpenAd = null
                     isAppOpenLoading = false
+                    if (!hasShownInitialAppOpen && pendingShowAppOpen && appOpenRetryCount < 3) {
+                        appOpenRetryCount++
+                        mainHandler.postDelayed({ loadAppOpenAd() }, 1500L)
+                    }
                 }
             }
         )
@@ -815,12 +824,13 @@ class MainActivity : ComponentActivity() {
                 Log.d(logTag, "AdMob AppOpenAd dismissed")
                 appOpenAd = null
                 isShowingFullScreenAd = false
-                loadAppOpenAd()
+                mainHandler.postDelayed({ loadInterstitialAd() }, 500L)
             }
             override fun onAdFailedToShowFullScreenContent(adError: AdError) {
                 Log.w(logTag, "AdMob AppOpenAd failed to show: ${adError.message}")
                 appOpenAd = null
                 isShowingFullScreenAd = false
+                mainHandler.postDelayed({ loadInterstitialAd() }, 500L)
             }
         }
         ad.show(this)
@@ -840,6 +850,7 @@ class MainActivity : ComponentActivity() {
                     Log.d(logTag, "AdMob InterstitialAd loaded successfully")
                     interstitialAd = ad
                     isInterstitialLoading = false
+                    interstitialRetryCount = 0
                     val pendingKey = pendingInterstitialActionKey
                     if (pendingKey != null) {
                         interstitialTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -853,12 +864,20 @@ class MainActivity : ComponentActivity() {
                     interstitialAd = null
                     isInterstitialLoading = false
                     val pendingKey = pendingInterstitialActionKey
+                    if (pendingKey != null && interstitialRetryCount < 2) {
+                        interstitialRetryCount++
+                        mainHandler.postDelayed({ loadInterstitialAd() }, 800L)
+                        return
+                    }
                     if (pendingKey != null) {
                         interstitialTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
                         hideAdLoadingOverlay()
                         pendingInterstitialActionKey = null
+                        interstitialRetryCount = 0
                         notifyInterstitialDismissedToWeb(pendingKey)
                     }
+                    // Background retry for next click
+                    mainHandler.postDelayed({ loadInterstitialAd() }, 4000L)
                 }
             }
         )
@@ -883,10 +902,12 @@ class MainActivity : ComponentActivity() {
                 val key = pendingInterstitialActionKey
                 pendingInterstitialActionKey = null
                 notifyInterstitialDismissedToWeb(key)
+                loadInterstitialAd()
             }
             interstitialTimeoutRunnable = timeout
-            mainHandler.postDelayed(timeout, 5000L)
+            mainHandler.postDelayed(timeout, 5500L)
 
+            isInterstitialLoading = false
             loadInterstitialAd()
         }
     }
@@ -898,14 +919,14 @@ class MainActivity : ComponentActivity() {
                 Log.d(logTag, "AdMob InterstitialAd dismissed")
                 interstitialAd = null
                 isShowingFullScreenAd = false
-                loadInterstitialAd()
+                mainHandler.postDelayed({ loadInterstitialAd() }, 600L)
                 notifyInterstitialDismissedToWeb(actionKey)
             }
             override fun onAdFailedToShowFullScreenContent(adError: AdError) {
                 Log.w(logTag, "AdMob InterstitialAd failed to show: ${adError.message}")
                 interstitialAd = null
                 isShowingFullScreenAd = false
-                loadInterstitialAd()
+                mainHandler.postDelayed({ loadInterstitialAd() }, 600L)
                 notifyInterstitialDismissedToWeb(actionKey)
             }
         }
@@ -926,6 +947,7 @@ class MainActivity : ComponentActivity() {
                     Log.d(logTag, "AdMob RewardedAd loaded successfully")
                     rewardedAd = ad
                     isRewardedLoading = false
+                    rewardedRetryCount = 0
                     val pendingKey = pendingRewardedActionKey
                     if (pendingKey != null) {
                         rewardedTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -939,12 +961,19 @@ class MainActivity : ComponentActivity() {
                     rewardedAd = null
                     isRewardedLoading = false
                     val pendingKey = pendingRewardedActionKey
+                    if (pendingKey != null && rewardedRetryCount < 2) {
+                        rewardedRetryCount++
+                        mainHandler.postDelayed({ loadRewardedAd() }, 800L)
+                        return
+                    }
                     if (pendingKey != null) {
                         rewardedTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
                         hideAdLoadingOverlay()
                         pendingRewardedActionKey = null
+                        rewardedRetryCount = 0
                         notifyRewardedDismissedToWeb(pendingKey, true)
                     }
+                    mainHandler.postDelayed({ loadRewardedAd() }, 4000L)
                 }
             }
         )
@@ -969,10 +998,12 @@ class MainActivity : ComponentActivity() {
                 val key = pendingRewardedActionKey
                 pendingRewardedActionKey = null
                 notifyRewardedDismissedToWeb(key, true)
+                loadRewardedAd()
             }
             rewardedTimeoutRunnable = timeout
             mainHandler.postDelayed(timeout, 6000L)
 
+            isRewardedLoading = false
             loadRewardedAd()
         }
     }
